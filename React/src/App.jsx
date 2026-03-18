@@ -4,6 +4,7 @@ import Register from './components/Register';
 import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './components/pages/DashboardPage';
+import EquipementsPage from './components/pages/EquipementsPage';
 import SectionPage from './components/pages/SectionPage';
 import SettingsPage from './components/pages/SettingsPage';
 import './styles/dashboard.css';
@@ -24,7 +25,7 @@ function App() {
             />
             <Route
               path="/equipements"
-              element={<SectionPage title="Equipements" subtitle="Etat global des unites de chauffage et ventilation." />}
+              element={<EquipementsPage />}
             />
             <Route
               path="/sites-zones"

@@ -178,46 +178,73 @@ class TuyaController extends Controller
      */
     public function getDevices(Request $request)
     {
-        $connection = TuyaConnection::where('user_id', Auth::id())->first();
-
-        if (!$connection) {
-            return response()->json(['message' => 'Tuya non connecté'], 401);
-        }
-
         try {
-            $baseUrl = $this->tuyaApiBase[$connection->region] ?? $this->tuyaApiBase['eu'];
+            $connection = TuyaConnection::where('user_id', Auth::id())->first();
 
-            $response = Http::withoutVerifying()->withHeaders([
-                'Authorization' => 'Bearer ' . $connection->access_token,
-            ])->get("{$baseUrl}/v1.0/users/me/devices");
-
-            if (!$response->successful()) {
-                // Token expiré, tenter de rafraîchir
-                if ($response->status() === 401) {
-                    $newToken = $this->getTuyaToken(
-                        $connection->client_id,
-                        $connection->client_secret,
-                        $connection->region
-                    );
-
-                    $connection->update(['access_token' => $newToken]);
-
-                    $response = Http::withoutVerifying()->withHeaders([
-                        'Authorization' => 'Bearer ' . $newToken,
-                    ])->get("{$baseUrl}/v1.0/users/me/devices");
-                }
+            if (!$connection) {
+                return response()->json(['message' => 'Tuya non connecté'], 401);
             }
 
-            if (!$response->successful()) {
-                throw new \Exception('Erreur lors de la récupération des appareils');
+            // Path inclut les query params car ils font partie de la signature Tuya
+            $path = '/v2.0/cloud/thing/device?page_no=1&page_size=20';
+            
+            $response = $this->tuyaSignedGet($connection, $path);
+            $payload = $response->json();
+
+            if ($this->shouldRefreshTuyaToken($response, $payload)) {
+                $newToken = $this->getTuyaToken(
+                    $connection->client_id,
+                    $connection->client_secret,
+                    $connection->region
+                );
+
+                $connection->update(['access_token' => $newToken]);
+                $connection->refresh();
+
+                $response = $this->tuyaSignedGet($connection, $path);
+                $payload = $response->json();
             }
 
-            $data = $response->json();
+            if (!$response->successful() || (isset($payload['success']) && $payload['success'] === false)) {
+                $message = $payload['msg'] ?? 'Erreur lors de la récupération des appareils';
+
+                Log::warning('Tuya devices request failed', [
+                    'status' => $response->status(),
+                    'region' => $connection->region,
+                    'path' => $path,
+                    'response' => $payload,
+                ]);
+
+                throw new \Exception($message);
+            }
+
+            $result = $payload['result'] ?? [];
+            $rawDevices = (is_array($result) && array_is_list($result))
+                ? $result
+                : ($result['list'] ?? []);
+
+            $devices = collect($rawDevices)->map(function ($device) {
+                return [
+                    'id' => $device['id'] ?? null,
+                    'name' => $device['name'] ?? 'Equipement sans nom',
+                    'category' => $device['category'] ?? 'inconnu',
+                    'online' => (bool) ($device['isOnline'] ?? $device['online'] ?? false),
+                    'model' => $device['model'] ?? null,
+                    'productName' => $device['productName'] ?? null,
+                    'ip' => $device['ip'] ?? null,
+                    'lastSeen' => $device['updateTime'] ?? null,
+                ];
+            })->values();
 
             return response()->json([
-                'data' => $data['result'] ?? [],
+                'data' => $devices,
                 'message' => 'Appareils récupérés avec succès',
             ]);
+        } catch (\PDOException $e) {
+            Log::error('Database connection error in getDevices', ['exception' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Erreur de connexion à la base de données. Vérifiez que MySQL est démarré.',
+            ], 500);
         } catch (\Exception $e) {
             return response()->json([
                 'message' => 'Erreur: ' . $e->getMessage(),
@@ -279,5 +306,41 @@ class TuyaController extends Controller
         TuyaConnection::where('user_id', Auth::id())->delete();
 
         return response()->json(['message' => 'Déconnexion Tuya réussie']);
+    }
+
+    private function tuyaSignedGet(TuyaConnection $connection, string $path)
+    {
+        $baseUrl = $this->tuyaApiBase[$connection->region] ?? $this->tuyaApiBase['eu'];
+        $timestamp = (string) round(microtime(true) * 1000);
+        $nonce = bin2hex(random_bytes(8));
+        $contentHash = hash('sha256', '');
+        $stringToSign = "GET\n{$contentHash}\n\n{$path}";
+        $signPayload = $connection->client_id . $connection->access_token . $timestamp . $nonce . $stringToSign;
+        $sign = strtoupper(hash_hmac('sha256', $signPayload, $connection->client_secret));
+
+        return Http::withoutVerifying()
+            ->acceptJson()
+            ->withHeaders([
+                'client_id' => $connection->client_id,
+                'access_token' => $connection->access_token,
+                'sign' => $sign,
+                't' => $timestamp,
+                'nonce' => $nonce,
+                'sign_method' => 'HMAC-SHA256',
+            ])
+            ->get("{$baseUrl}{$path}");
+    }
+
+    private function shouldRefreshTuyaToken($response, array $payload): bool
+    {
+        if ($response->status() === 401) {
+            return true;
+        }
+
+        if (!isset($payload['code'])) {
+            return false;
+        }
+
+        return in_array((int) $payload['code'], [1010, 1011], true);
     }
 }

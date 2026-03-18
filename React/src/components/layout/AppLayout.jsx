@@ -65,13 +65,6 @@ export default function AppLayout() {
                     </div>
                 </div>
 
-                <div className="simulation-toggle">
-                    <span>Simulation</span>
-                    <button type="button" aria-label="Activer simulation">
-                        <span />
-                    </button>
-                </div>
-
                 <nav className="sidebar-nav">
                     {navItems.map((item) => (
                         <NavLink
