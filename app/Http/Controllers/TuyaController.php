@@ -6,6 +6,7 @@ use App\Models\TuyaConnection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class TuyaController extends Controller
 {
@@ -21,13 +22,25 @@ class TuyaController extends Controller
      */
     public function getConnection(Request $request)
     {
-        $connection = TuyaConnection::where('user_id', Auth::id())->first();
+        $userId = Auth::id();
 
-        if (!$connection) {
-            return response()->json(['message' => 'Aucune connexion Tuya trouvée'], 404);
+        if (!$userId) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
         }
 
-        return response()->json($connection);
+        $connection = TuyaConnection::where('user_id', $userId)->first();
+
+        if (!$connection) {
+            return response()->json([
+                'connected' => false,
+                'message' => 'Aucune connexion Tuya trouvée',
+            ]);
+        }
+
+        return response()->json([
+            'connected' => true,
+            'data' => $connection,
+        ]);
     }
 
     /**
@@ -35,6 +48,12 @@ class TuyaController extends Controller
      */
     public function connect(Request $request)
     {
+        $userId = Auth::id();
+
+        if (!$userId) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+
         $validated = $request->validate([
             'clientId' => 'required|string',
             'clientSecret' => 'required|string',
@@ -51,7 +70,7 @@ class TuyaController extends Controller
 
             // Sauvegarder la connexion
             $connection = TuyaConnection::updateOrCreate(
-                ['user_id' => Auth::id()],
+                ['user_id' => $userId],
                 [
                     'client_id' => $validated['clientId'],
                     'client_secret' => $validated['clientSecret'],
@@ -62,9 +81,9 @@ class TuyaController extends Controller
 
             return response()->json([
                 'message' => 'Connexion Tuya établie avec succès',
-                'token' => $token,
+                'connected' => true,
                 'data' => $connection,
-            ], 201);
+            ]);
         } catch (\Exception $e) {
             return response()->json([
                 'message' => 'Erreur lors de la connexion à Tuya: ' . $e->getMessage(),
@@ -78,17 +97,74 @@ class TuyaController extends Controller
     private function getTuyaToken($clientId, $clientSecret, $region)
     {
         $baseUrl = $this->tuyaApiBase[$region] ?? $this->tuyaApiBase['eu'];
+        $timestamp = (string) round(microtime(true) * 1000);
+        $nonce = bin2hex(random_bytes(8));
+        $path = '/v1.0/token?grant_type=1';
+        $contentHash = hash('sha256', '');
+        $stringToSign = "GET\n{$contentHash}\n\n{$path}";
+        $signPayload = $clientId . $timestamp . $nonce . $stringToSign;
+        $sign = strtoupper(hash_hmac('sha256', $signPayload, $clientSecret));
 
-        $response = Http::withoutVerifying()->post("{$baseUrl}/v1.0/token", [
-            'client_id' => $clientId,
-            'client_secret' => $clientSecret,
-        ]);
-
-        if (!$response->successful()) {
-            throw new \Exception('Identifiants Tuya invalides');
-        }
+        $response = Http::withoutVerifying()
+            ->acceptJson()
+            ->withHeaders([
+                'client_id' => $clientId,
+                'sign' => $sign,
+                't' => $timestamp,
+                'nonce' => $nonce,
+                'sign_method' => 'HMAC-SHA256',
+            ])
+            ->get("{$baseUrl}{$path}");
 
         $data = $response->json();
+
+        // Compatibilité avec les projets Tuya qui acceptent encore la signature legacy
+        if (
+            (!$response->successful() || (isset($data['success']) && $data['success'] === false))
+            && isset($data['msg'])
+            && stripos((string) $data['msg'], 'sign invalid') !== false
+        ) {
+            $legacyTimestamp = (string) round(microtime(true) * 1000);
+            $legacySign = strtoupper(hash_hmac('sha256', $clientId . $legacyTimestamp, $clientSecret));
+
+            $legacyResponse = Http::withoutVerifying()
+                ->acceptJson()
+                ->withHeaders([
+                    'client_id' => $clientId,
+                    'sign' => $legacySign,
+                    't' => $legacyTimestamp,
+                    'sign_method' => 'HMAC-SHA256',
+                ])
+                ->get("{$baseUrl}{$path}");
+
+            $legacyData = $legacyResponse->json();
+
+            if ($legacyResponse->successful() && (!isset($legacyData['success']) || $legacyData['success'] !== false)) {
+                $data = $legacyData;
+                $response = $legacyResponse;
+            }
+        }
+
+        if (!$response->successful()) {
+            $message = $data['msg'] ?? 'Réponse HTTP invalide de Tuya';
+            Log::warning('Tuya token request failed', [
+                'status' => $response->status(),
+                'region' => $region,
+                'path' => $path,
+                'response' => $data,
+            ]);
+            throw new \Exception('Identifiants Tuya invalides: ' . $message);
+        }
+
+        if (isset($data['success']) && $data['success'] === false) {
+            $message = $data['msg'] ?? 'Requête refusée par Tuya';
+            Log::warning('Tuya token rejected', [
+                'region' => $region,
+                'path' => $path,
+                'response' => $data,
+            ]);
+            throw new \Exception('Connexion Tuya refusée: ' . $message);
+        }
 
         if (!isset($data['result']['access_token'])) {
             throw new \Exception('Token non reçu de Tuya');

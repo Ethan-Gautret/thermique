@@ -36,6 +36,8 @@ export const authService = {
 
   logout: () => {
     localStorage.removeItem("auth_token");
+    localStorage.removeItem("tuya_access_token");
+    localStorage.removeItem("tuya_connected");
     return api.post("/logout");
   },
 

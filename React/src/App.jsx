@@ -5,6 +5,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './components/pages/DashboardPage';
 import SectionPage from './components/pages/SectionPage';
+import SettingsPage from './components/pages/SettingsPage';
 import './styles/dashboard.css';
 
 function App() {
@@ -47,7 +48,7 @@ function App() {
             />
             <Route
               path="/parametres"
-              element={<SectionPage title="Parametres" subtitle="Configuration des utilisateurs, roles et API externes." />}
+              element={<SettingsPage />}
             />
           </Route>
         </Route>
