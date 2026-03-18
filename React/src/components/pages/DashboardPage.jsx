@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import tuyaService from '../../services/tuya';
+
 const temperaturePoints = [
     { label: '4h30', value: 18.8 },
     { label: '5h30', value: 20.3 },
@@ -73,6 +76,36 @@ const upcomingActions = [
 ];
 
 export default function DashboardPage() {
+    const [deviceStats, setDeviceStats] = useState({
+        loading: true,
+        total: 0,
+        online: 0,
+    });
+
+    useEffect(() => {
+        const loadDeviceStats = async () => {
+            try {
+                const response = await tuyaService.getDevices();
+                const devices = response.data?.data || [];
+                const online = devices.filter((device) => device.online).length;
+
+                setDeviceStats({
+                    loading: false,
+                    total: devices.length,
+                    online,
+                });
+            } catch {
+                setDeviceStats({
+                    loading: false,
+                    total: 0,
+                    online: 0,
+                });
+            }
+        };
+
+        loadDeviceStats();
+    }, []);
+
     return (
         <section className="page-shell">
             <header className="page-header">
@@ -89,8 +122,12 @@ export default function DashboardPage() {
 
                 <article className="stat-card">
                     <p className="stat-title">Equipements actifs</p>
-                    <p className="stat-value">6/9</p>
-                    <p className="stat-foot">+6 en ligne</p>
+                    <p className="stat-value">
+                        {deviceStats.loading ? '...' : `${deviceStats.online}/${deviceStats.total}`}
+                    </p>
+                    <p className="stat-foot">
+                        {deviceStats.loading ? 'Chargement des equipements...' : `${deviceStats.online} en ligne`}
+                    </p>
                 </article>
 
                 <article className="stat-card">
