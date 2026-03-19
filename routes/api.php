@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\TestController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\TuyaController;
+use App\Http\Controllers\SiteZoneController;
 
 Route::get('/test', [TestController::class, 'index']);
 
@@ -23,5 +24,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/devices', [TuyaController::class, 'getDevices']);
         Route::post('/device/control', [TuyaController::class, 'controlDevice']);
         Route::post('/disconnect', [TuyaController::class, 'disconnect']);
+    });
+
+    Route::prefix('sites-zones')->group(function () {
+        Route::get('/rooms', [SiteZoneController::class, 'index']);
+        Route::post('/rooms', [SiteZoneController::class, 'store']);
+        Route::put('/rooms/{room}', [SiteZoneController::class, 'update']);
+        Route::delete('/rooms/{room}', [SiteZoneController::class, 'destroy']);
     });
 });

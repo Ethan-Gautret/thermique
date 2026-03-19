@@ -15,6 +15,7 @@ class TuyaConnection extends Model
         'client_secret',
         'access_token',
         'region',
+        'home_id',
     ];
 
     protected $hidden = [

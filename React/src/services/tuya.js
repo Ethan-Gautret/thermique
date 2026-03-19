@@ -6,8 +6,13 @@ export const tuyaService = {
     api.get('/tuya/connection'),
 
   // Sauvegarder les credentials Tuya pour l'utilisateur connecté
-  connectTuya: (clientId, clientSecret, region = 'eu') =>
-    api.post('/tuya/connect', { clientId, clientSecret, region }).then((res) => res.data),
+  connectTuya: (clientId, clientSecret, region = 'eu', homeId = '') =>
+    api.post('/tuya/connect', {
+      clientId,
+      clientSecret,
+      region,
+      homeId: homeId || null,
+    }).then((res) => res.data),
 
   // Récupérer la liste des appareils
   getDevices: () =>

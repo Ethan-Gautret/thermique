@@ -7,6 +7,7 @@ import DashboardPage from './components/pages/DashboardPage';
 import EquipementsPage from './components/pages/EquipementsPage';
 import SectionPage from './components/pages/SectionPage';
 import SettingsPage from './components/pages/SettingsPage';
+import SitesZonesPage from './components/pages/SitesZonesPage';
 import './styles/dashboard.css';
 
 function App() {
@@ -29,7 +30,7 @@ function App() {
             />
             <Route
               path="/sites-zones"
-              element={<SectionPage title="Sites & Zones" subtitle="Regroupement des batiments et zones thermiques." />}
+              element={<SitesZonesPage />}
             />
             <Route
               path="/scenarios"

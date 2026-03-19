@@ -58,6 +58,7 @@ class TuyaController extends Controller
             'clientId' => 'required|string',
             'clientSecret' => 'required|string',
             'region' => 'required|in:eu,us,cn,in',
+            'homeId' => 'nullable|string|max:120',
         ]);
 
         try {
@@ -76,6 +77,7 @@ class TuyaController extends Controller
                     'client_secret' => $validated['clientSecret'],
                     'access_token' => $token,
                     'region' => $validated['region'],
+                    'home_id' => $validated['homeId'] ?? null,
                 ]
             );
 

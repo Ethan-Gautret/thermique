@@ -5,6 +5,7 @@ const defaultForm = {
     clientId: '',
     clientSecret: '',
     region: 'eu',
+    homeId: '',
 };
 
 const regionOptions = [
@@ -38,6 +39,7 @@ export default function SettingsPage() {
                         ...prev,
                         clientId: payload.data.client_id || '',
                         region: payload.data.region || 'eu',
+                        homeId: payload.data.home_id || '',
                     }));
                 } else {
                     setConnection(null);
@@ -77,7 +79,12 @@ export default function SettingsPage() {
         }
 
         try {
-            const data = await tuyaService.connectTuya(form.clientId, form.clientSecret, form.region);
+            const data = await tuyaService.connectTuya(
+                form.clientId,
+                form.clientSecret,
+                form.region,
+                form.homeId
+            );
             setConnection(data.data || null);
             setMessage('Connexion Tuya enregistree et liee a votre compte avec succes.');
             setForm((prev) => ({
@@ -166,6 +173,17 @@ export default function SettingsPage() {
                             </select>
                         </label>
 
+                        <label>
+                            Home ID (Smart Life / Tuya)
+                            <input
+                                type="text"
+                                value={form.homeId}
+                                onChange={handleChange('homeId')}
+                                placeholder="Ex: 123456789"
+                                autoComplete="off"
+                            />
+                        </label>
+
                         <div className="tuya-actions">
                             <button type="submit" disabled={saving || disconnecting}>
                                 {saving ? 'Connexion en cours...' : connection ? 'Mettre a jour la connexion' : 'Connecter Tuya'}
@@ -187,6 +205,9 @@ export default function SettingsPage() {
 
                 <p className="tuya-hint">
                     Chaque utilisateur conserve sa propre connexion Tuya. Un autre compte ne peut pas reutiliser la votre.
+                </p>
+                <p className="tuya-hint">
+                    Le Home ID est requis pour synchroniser les pieces vers l'application Tuya / Smart Life.
                 </p>
             </article>
         </section>

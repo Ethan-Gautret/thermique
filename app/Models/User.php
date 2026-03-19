@@ -60,6 +60,11 @@ class User extends Authenticatable
         return $this->hasOne(TuyaConnection::class);
     }
 
+    public function rooms()
+    {
+        return $this->hasMany(Room::class);
+    }
+
     public function isAdmin()
     {
         return $this->role === 'admin';
