@@ -1,0 +1,147 @@
+.categories-manager {
+    padding: 1rem;
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+}
+
+.categories-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.categories-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: #0f172a;
+}
+
+.category-form {
+    display: grid;
+    gap: 0.6rem;
+    padding: 0.8rem;
+    background: #f8fafc;
+    border-radius: 8px;
+    border: 1px solid #edf2f7;
+}
+
+.category-form input[type="text"],
+.category-form textarea {
+    padding: 0.5rem 0.6rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 0.8rem;
+}
+
+.category-form input[type="color"] {
+    width: 50px;
+    height: 36px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.category-form textarea {
+    resize: none;
+    font-family: inherit;
+}
+
+.form-row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+}
+
+.categories-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.category-item-container {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.category-item {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: #475569;
+    transition: all 0.2s ease;
+}
+
+.category-item:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+}
+
+.category-item.active {
+    background: #6366f1;
+    color: white;
+    border-color: #6366f1;
+    font-weight: 500;
+}
+
+.btn-delete-mini {
+    padding: 0.35rem 0.45rem;
+    font-size: 0.75rem;
+    border: 1px solid #fecaca;
+    background: #fee2e2;
+    color: #dc2626;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-delete-mini:hover {
+    background: #fca5a5;
+    border-color: #dc2626;
+}
+
+.btn-primary-small {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.75rem;
+    border: none;
+    background: #6366f1;
+    color: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.btn-primary-small:hover {
+    background: #4f46e5;
+}
+
+.empty-state {
+    text-align: center;
+    color: #94a3b8;
+    font-size: 0.8rem;
+    padding: 0.5rem;
+    margin: 0;
+}
+
+.error-message {
+    padding: 0.6rem 0.8rem;
+    background: #fee2e2;
+    color: #dc2626;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    border: 1px solid #fecaca;
+}

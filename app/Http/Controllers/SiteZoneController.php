@@ -142,6 +142,14 @@ class SiteZoneController extends Controller
 
             return null;
         } catch (\Throwable $e) {
+            if (str_contains((string) $e->getMessage(), 'TUYA_ROOM_API_UNSUPPORTED')) {
+                $room->last_sync_error = null;
+                $room->synced_at = null;
+                $room->save();
+
+                return 'Piece enregistree localement. L\'API Tuya de gestion des pieces n\'est pas disponible sur ce projet (code 1108 uri path invalid).';
+            }
+
             Log::warning('Tuya room sync failed', [
                 'room_id' => $room->id,
                 'user_id' => $room->user_id,
@@ -172,7 +180,11 @@ class SiteZoneController extends Controller
         $deletePaths = [
             "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
+            "/v1.0/iot-03/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
+            "/v1.0/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
         ];
+
+        $errors = [];
 
         foreach ($deletePaths as $path) {
             $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'DELETE', $path);
@@ -181,9 +193,11 @@ class SiteZoneController extends Controller
             if ($this->isTuyaSuccess($response, $payload)) {
                 return null;
             }
+
+            $errors[] = $this->formatTuyaError($path, $response, $payload);
         }
 
-        return 'Piece supprimee localement, mais la suppression Tuya/Smart Life a echoue.';
+        return 'Piece supprimee localement, mais la suppression Tuya/Smart Life a echoue. ' . implode(' | ', $errors);
     }
 
     private function createRemoteRoom(TuyaConnection $connection, Room $room): string
@@ -191,7 +205,12 @@ class SiteZoneController extends Controller
         $paths = [
             "/v1.0/iot-03/homes/{$connection->home_id}/rooms",
             "/v1.0/homes/{$connection->home_id}/rooms",
+            "/v1.0/iot-03/families/{$connection->home_id}/rooms",
+            "/v1.0/families/{$connection->home_id}/rooms",
         ];
+
+        $errors = [];
+        $codes = [];
 
         foreach ($paths as $path) {
             $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'POST', $path, [
@@ -215,9 +234,22 @@ class SiteZoneController extends Controller
 
                 throw new \RuntimeException('ID de piece Tuya non retourne.');
             }
+
+            $errors[] = $this->formatTuyaError($path, $response, $payload);
+            $codes[] = (int) ($payload['code'] ?? $response->status());
         }
 
-        throw new \RuntimeException('Impossible de creer la piece dans Tuya. Verifiez Home ID et les permissions Smart Home APIs.');
+        if (!empty($codes) && count(array_unique($codes)) === 1 && $codes[0] === 1108) {
+            throw new \RuntimeException(
+                'TUYA_ROOM_API_UNSUPPORTED: Les endpoints rooms ne sont pas exposes pour ce projet Tuya. '
+                . implode(' | ', $errors)
+            );
+        }
+
+        throw new \RuntimeException(
+            'Impossible de creer la piece dans Tuya. Verifiez Home ID et les permissions Smart Home APIs. '
+            . implode(' | ', $errors)
+        );
     }
 
     private function updateRemoteRoom(TuyaConnection $connection, Room $room): void
@@ -225,7 +257,11 @@ class SiteZoneController extends Controller
         $paths = [
             "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
+            "/v1.0/iot-03/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
+            "/v1.0/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
         ];
+
+        $errors = [];
 
         foreach ($paths as $path) {
             $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'PUT', $path, [
@@ -236,7 +272,11 @@ class SiteZoneController extends Controller
             if ($this->isTuyaSuccess($response, $payload)) {
                 return;
             }
+
+            $errors[] = $this->formatTuyaError($path, $response, $payload);
         }
+
+        throw new \RuntimeException('Impossible de renommer la piece dans Tuya. ' . implode(' | ', $errors));
     }
 
     private function syncRemoteRoomDevices(TuyaConnection $connection, Room $room): void
@@ -244,11 +284,15 @@ class SiteZoneController extends Controller
         $paths = [
             "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
             "/v1.0/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
+            "/v1.0/iot-03/families/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
+            "/v1.0/families/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
         ];
 
         $body = [
             'device_ids' => $room->device_ids ?? [],
         ];
+
+        $errors = [];
 
         foreach ($paths as $path) {
             $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'PUT', $path, $body);
@@ -257,7 +301,19 @@ class SiteZoneController extends Controller
             if ($this->isTuyaSuccess($response, $payload)) {
                 return;
             }
+
+            $errors[] = $this->formatTuyaError($path, $response, $payload);
         }
+
+        throw new \RuntimeException('Impossible d\'affecter les equipements a la piece dans Tuya. ' . implode(' | ', $errors));
+    }
+
+    private function formatTuyaError(string $path, Response $response, array $payload): string
+    {
+        $code = $payload['code'] ?? $response->status();
+        $msg = $payload['msg'] ?? 'unknown';
+
+        return "{$path} => code {$code}, msg {$msg}";
     }
 
     private function tuyaSignedRequestWithAutoRefresh(

@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\TestController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\TuyaController;
 use App\Http\Controllers\SiteZoneController;
+use App\Http\Controllers\CategoryController;
 
 Route::get('/test', [TestController::class, 'index']);
 
@@ -23,6 +24,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/connect', [TuyaController::class, 'connect']);
         Route::get('/devices', [TuyaController::class, 'getDevices']);
         Route::post('/device/control', [TuyaController::class, 'controlDevice']);
+        Route::put('/devices/{deviceId}/category', [TuyaController::class, 'updateDeviceCategory']);
         Route::post('/disconnect', [TuyaController::class, 'disconnect']);
     });
 
@@ -31,5 +33,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/rooms', [SiteZoneController::class, 'store']);
         Route::put('/rooms/{room}', [SiteZoneController::class, 'update']);
         Route::delete('/rooms/{room}', [SiteZoneController::class, 'destroy']);
+    });
+
+    // Routes Catégories
+    Route::prefix('categories')->group(function () {
+        Route::get('/', [CategoryController::class, 'index']);
+        Route::post('/', [CategoryController::class, 'store']);
+        Route::put('/{category}', [CategoryController::class, 'update']);
+        Route::delete('/{category}', [CategoryController::class, 'destroy']);
     });
 });

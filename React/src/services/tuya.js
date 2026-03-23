@@ -24,6 +24,10 @@ export const tuyaService = {
   // Contrôler un appareil
   controlDevice: (deviceId, command, value) =>
     api.post('/tuya/device/control', { deviceId, command, value }),
+
+  // Mettre à jour la catégorie d'un équipement
+  updateDeviceCategory: (tuyaDeviceId, categoryId) =>
+    api.put(`/tuya/devices/${tuyaDeviceId}/category`, { category_id: categoryId }),
 };
 
 export default tuyaService;

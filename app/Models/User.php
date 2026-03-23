@@ -65,6 +65,11 @@ class User extends Authenticatable
         return $this->hasMany(Room::class);
     }
 
+    public function categories()
+    {
+        return $this->hasMany(Category::class);
+    }
+
     public function isAdmin()
     {
         return $this->role === 'admin';

@@ -86,10 +86,11 @@ export default function SettingsPage() {
                 form.homeId
             );
             setConnection(data.data || null);
-            setMessage('Connexion Tuya enregistree et liee a votre compte avec succes.');
+            setMessage(data.message || 'Connexion Tuya enregistree et liee a votre compte avec succes.');
             setForm((prev) => ({
                 ...prev,
                 clientSecret: '',
+                homeId: data.data?.home_id || prev.homeId,
             }));
         } catch (err) {
             setError(err.response?.data?.message || 'La connexion Tuya a echoue. Verifiez vos identifiants.');
