@@ -10,6 +10,7 @@ export default function EquipementsPage() {
     const [error, setError] = useState('');
     const [devices, setDevices] = useState([]);
     const [categories, setCategories] = useState([]);
+    const [controllingDeviceId, setControllingDeviceId] = useState(null);
     const [editingDevice, setEditingDevice] = useState(null);
     const [showCategoryForm, setShowCategoryForm] = useState(false);
     const [newCategory, setNewCategory] = useState({
@@ -57,6 +58,54 @@ export default function EquipementsPage() {
         }
     };
 
+    const sendPowerCommand = async (deviceId, nextPowerOn) => {
+        const commandCandidates = ['switch_led', 'switch_1', 'switch'];
+        let lastError = null;
+
+        for (const command of commandCandidates) {
+            try {
+                const response = await tuyaService.controlDevice(deviceId, command, nextPowerOn);
+                const payload = response?.data?.data ?? response?.data;
+
+                if (payload?.applied === false) {
+                    throw new Error('La commande a ete envoyee mais l\'etat reel n\'a pas change.');
+                }
+
+                return true;
+            } catch (err) {
+                lastError = err;
+            }
+        }
+
+        throw lastError || new Error('Commande d\'alimentation indisponible pour cet equipement.');
+    };
+
+    const handleTogglePower = async (device) => {
+        if (!device?.id) {
+            return;
+        }
+
+        if (!device.online) {
+            setError('Impossible de controler un equipement hors ligne.');
+            return;
+        }
+
+        const nextPowerOn = !(device.powerOn === true);
+
+        setControllingDeviceId(device.id);
+        setError('');
+
+        try {
+            await sendPowerCommand(device.id, nextPowerOn);
+            await loadDevices();
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de changer l\'etat de cet equipement.';
+            setError(message);
+        } finally {
+            setControllingDeviceId(null);
+        }
+    };
+
     const handleCreateCategory = async (e) => {
         e.preventDefault();
         try {
@@ -101,6 +150,77 @@ export default function EquipementsPage() {
     }, []);
 
     const categoriesList = Array.isArray(categories) ? categories : [];
+
+    const renderDeviceCard = (device) => {
+        const isControlling = controllingDeviceId === device.id;
+        const canControl = device.online && !isControlling;
+
+        return (
+            <article key={device.id} className="equipment-card">
+                <div className="equipment-head">
+                    <h3>{device.name}</h3>
+                    <span className={`tuya-status ${device.online ? 'connected' : 'disconnected'}`}>
+                        {device.online ? 'En ligne' : 'Hors ligne'}
+                    </span>
+                </div>
+
+                <dl className="equipment-meta">
+                    <div>
+                        <dt>ID</dt>
+                        <dd>{device.id}</dd>
+                    </div>
+                    <div>
+                        <dt>Modele</dt>
+                        <dd>{device.model || '-'}</dd>
+                    </div>
+                    <div>
+                        <dt>Etat</dt>
+                        <dd>
+                            {device.powerOn === null ? (
+                                <span className="device-state unknown">
+                                    <span className="status-icon">⚠️</span>
+                                    Information non disponible
+                                </span>
+                            ) : device.powerOn ? (
+                                <span className="device-state on">
+                                    <span className="status-icon">🟢</span>
+                                    Allumé
+                                </span>
+                            ) : (
+                                <span className="device-state off">
+                                    <span className="status-icon">⚫</span>
+                                    Éteint
+                                </span>
+                            )}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>IP</dt>
+                        <dd>{device.ip || '-'}</dd>
+                    </div>
+                </dl>
+
+                <div className="equipment-footer">
+                    <button
+                        type="button"
+                        className={`btn-power-toggle ${device.powerOn ? 'off' : 'on'}`}
+                        onClick={() => handleTogglePower(device)}
+                        disabled={!canControl}
+                        title={device.online ? 'Controler la mise sous tension' : 'Appareil hors ligne'}
+                    >
+                        {isControlling ? 'Envoi...' : (device.powerOn ? 'Eteindre' : 'Allumer')}
+                    </button>
+                    <button
+                        type="button"
+                        className="btn-edit"
+                        onClick={() => setEditingDevice(device)}
+                    >
+                        Modifier
+                    </button>
+                </div>
+            </article>
+        );
+    };
 
     return (
         <section className="page-shell">
@@ -207,62 +327,7 @@ export default function EquipementsPage() {
                                         </button>
                                     </div>
                                     <div className="equipments-grid">
-                                        {categoryDevices.map((device) => (
-                                            <article key={device.id} className="equipment-card">
-                                                <div className="equipment-head">
-                                                    <h3>{device.name}</h3>
-                                                    <span className={`tuya-status ${device.online ? 'connected' : 'disconnected'}`}>
-                                                        {device.online ? 'En ligne' : 'Hors ligne'}
-                                                    </span>
-                                                </div>
-
-                                                <dl className="equipment-meta">
-                                                    <div>
-                                                        <dt>ID</dt>
-                                                        <dd>{device.id}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>Modele</dt>
-                                                        <dd>{device.model || '-'}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>Etat</dt>
-                                                        <dd>
-                                                            {device.powerOn === null ? (
-                                                                <span className="device-state unknown">
-                                                                    <span className="status-icon">⚠️</span>
-                                                                    Information non disponible
-                                                                </span>
-                                                            ) : device.powerOn ? (
-                                                                <span className="device-state on">
-                                                                    <span className="status-icon">🟢</span>
-                                                                    Allumé
-                                                                </span>
-                                                            ) : (
-                                                                <span className="device-state off">
-                                                                    <span className="status-icon">⚫</span>
-                                                                    Éteint
-                                                                </span>
-                                                            )}
-                                                        </dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>IP</dt>
-                                                        <dd>{device.ip || '-'}</dd>
-                                                    </div>
-                                                </dl>
-
-                                                <div className="equipment-footer">
-                                                    <button
-                                                        type="button"
-                                                        className="btn-edit"
-                                                        onClick={() => setEditingDevice(device)}
-                                                    >
-                                                        Modifier
-                                                    </button>
-                                                </div>
-                                            </article>
-                                        ))}
+                                        {categoryDevices.map((device) => renderDeviceCard(device))}
                                     </div>
                                 </div>
                             );
@@ -282,62 +347,7 @@ export default function EquipementsPage() {
                                         </div>
                                     </div>
                                     <div className="equipments-grid">
-                                        {unCategorizedDevices.map((device) => (
-                                            <article key={device.id} className="equipment-card">
-                                                <div className="equipment-head">
-                                                    <h3>{device.name}</h3>
-                                                    <span className={`tuya-status ${device.online ? 'connected' : 'disconnected'}`}>
-                                                        {device.online ? 'En ligne' : 'Hors ligne'}
-                                                    </span>
-                                                </div>
-
-                                                <dl className="equipment-meta">
-                                                    <div>
-                                                        <dt>ID</dt>
-                                                        <dd>{device.id}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>Modele</dt>
-                                                        <dd>{device.model || '-'}</dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>Etat</dt>
-                                                        <dd>
-                                                            {device.powerOn === null ? (
-                                                                <span className="device-state unknown">
-                                                                    <span className="status-icon">⚠️</span>
-                                                                    Information non disponible
-                                                                </span>
-                                                            ) : device.powerOn ? (
-                                                                <span className="device-state on">
-                                                                    <span className="status-icon">🟢</span>
-                                                                    Allumé
-                                                                </span>
-                                                            ) : (
-                                                                <span className="device-state off">
-                                                                    <span className="status-icon">⚫</span>
-                                                                    Éteint
-                                                                </span>
-                                                            )}
-                                                        </dd>
-                                                    </div>
-                                                    <div>
-                                                        <dt>IP</dt>
-                                                        <dd>{device.ip || '-'}</dd>
-                                                    </div>
-                                                </dl>
-
-                                                <div className="equipment-footer">
-                                                    <button
-                                                        type="button"
-                                                        className="btn-edit"
-                                                        onClick={() => setEditingDevice(device)}
-                                                    >
-                                                        Modifier
-                                                    </button>
-                                                </div>
-                                            </article>
-                                        ))}
+                                        {unCategorizedDevices.map((device) => renderDeviceCard(device))}
                                     </div>
                                 </div>
                             );

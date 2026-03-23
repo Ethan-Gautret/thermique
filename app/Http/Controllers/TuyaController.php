@@ -567,26 +567,56 @@ class TuyaController extends Controller
         }
 
         try {
-            $baseUrl = $this->tuyaApiBase[$connection->region] ?? $this->tuyaApiBase['eu'];
+            $paths = [
+                "/v1.0/iot-03/devices/{$validated['deviceId']}/commands",
+                "/v1.0/devices/{$validated['deviceId']}/commands",
+            ];
 
-            $response = Http::withoutVerifying()->withHeaders([
-                'Authorization' => 'Bearer ' . $connection->access_token,
-            ])->post("{$baseUrl}/v1.0/iot-03/devices/{$validated['deviceId']}/commands", [
+            $body = [
                 'commands' => [
                     [
                         'code' => $validated['command'],
                         'value' => $validated['value'],
                     ],
                 ],
-            ]);
+            ];
 
-            if (!$response->successful()) {
-                throw new \Exception('Erreur lors du contrôle de l\'appareil');
+            $errors = [];
+            $commandSent = false;
+
+            foreach ($paths as $path) {
+                $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'POST', $path, $body);
+                $payload = $response->json() ?: [];
+
+                if ($response->successful() && (!isset($payload['success']) || $payload['success'] !== false)) {
+                    $commandSent = true;
+                    break;
+                }
+
+                $errors[] = sprintf(
+                    '%s => code %s, msg %s',
+                    $path,
+                    (string) ($payload['code'] ?? $response->status()),
+                    (string) ($payload['msg'] ?? 'unknown')
+                );
             }
 
+            if (!$commandSent) {
+                throw new \Exception('Commande refusee par Tuya. ' . implode(' | ', $errors));
+            }
+
+            $expectedValue = (bool) $validated['value'];
+            $currentPowerOn = $this->waitForPowerState($connection, $validated['deviceId'], $expectedValue);
+
             return response()->json([
-                'message' => 'Commande envoyée avec succès',
-                'data' => $response->json(),
+                'message' => 'Commande envoyee avec succes',
+                'data' => [
+                    'deviceId' => $validated['deviceId'],
+                    'command' => $validated['command'],
+                    'expectedPowerOn' => $expectedValue,
+                    'currentPowerOn' => $currentPowerOn,
+                    'applied' => $currentPowerOn === $expectedValue,
+                ],
             ]);
         } catch (\Exception $e) {
             return response()->json([
@@ -683,6 +713,118 @@ class TuyaController extends Controller
                 'sign_method' => 'HMAC-SHA256',
             ])
             ->get("{$baseUrl}{$path}");
+    }
+
+    private function tuyaSignedRequest(TuyaConnection $connection, string $method, string $path, ?array $body = null)
+    {
+        $baseUrl = $this->tuyaApiBase[$connection->region] ?? $this->tuyaApiBase['eu'];
+        $timestamp = (string) round(microtime(true) * 1000);
+        $nonce = bin2hex(random_bytes(8));
+        $method = strtoupper($method);
+        $jsonBody = $body ? json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
+        $contentHash = hash('sha256', $jsonBody ?: '');
+        $stringToSign = "{$method}\n{$contentHash}\n\n{$path}";
+        $signPayload = $connection->client_id . $connection->access_token . $timestamp . $nonce . $stringToSign;
+        $sign = strtoupper(hash_hmac('sha256', $signPayload, $connection->client_secret));
+
+        $request = Http::withoutVerifying()
+            ->acceptJson()
+            ->withHeaders([
+                'client_id' => $connection->client_id,
+                'access_token' => $connection->access_token,
+                'sign' => $sign,
+                't' => $timestamp,
+                'nonce' => $nonce,
+                'sign_method' => 'HMAC-SHA256',
+                'Content-Type' => 'application/json',
+            ]);
+
+        if ($method === 'GET') {
+            return $request->get("{$baseUrl}{$path}");
+        }
+
+        if ($method === 'POST') {
+            return $request->withBody($jsonBody ?: '{}', 'application/json')->post("{$baseUrl}{$path}");
+        }
+
+        if ($method === 'PUT') {
+            return $request->withBody($jsonBody ?: '{}', 'application/json')->put("{$baseUrl}{$path}");
+        }
+
+        if ($method === 'DELETE') {
+            return $request->withBody($jsonBody ?: '{}', 'application/json')->delete("{$baseUrl}{$path}");
+        }
+
+        throw new \InvalidArgumentException('Methode HTTP Tuya non supportee: ' . $method);
+    }
+
+    private function tuyaSignedRequestWithAutoRefresh(
+        TuyaConnection $connection,
+        string $method,
+        string $path,
+        ?array $body = null
+    ) {
+        $response = $this->tuyaSignedRequest($connection, $method, $path, $body);
+        $payload = $response->json() ?: [];
+
+        if ($this->shouldRefreshTuyaToken($response, $payload)) {
+            $newToken = $this->getTuyaToken(
+                $connection->client_id,
+                $connection->client_secret,
+                $connection->region
+            );
+
+            $connection->update(['access_token' => $newToken]);
+            $connection->refresh();
+
+            return $this->tuyaSignedRequest($connection, $method, $path, $body);
+        }
+
+        return $response;
+    }
+
+    private function fetchDevicePowerState(TuyaConnection $connection, string $deviceId): ?bool
+    {
+        $path = "/v1.0/iot-03/devices/{$deviceId}/status";
+        $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'GET', $path);
+        $payload = $response->json() ?: [];
+
+        if (!$response->successful() || (isset($payload['success']) && $payload['success'] === false)) {
+            return null;
+        }
+
+        $properties = $payload['result'] ?? [];
+        if (!is_array($properties)) {
+            return null;
+        }
+
+        foreach ($properties as $property) {
+            if (!is_array($property) || !isset($property['code'])) {
+                continue;
+            }
+
+            $code = strtolower((string) $property['code']);
+            if (strpos($code, 'switch') !== false || strpos($code, 'power') !== false) {
+                return (bool) ($property['value'] ?? false);
+            }
+        }
+
+        return null;
+    }
+
+    private function waitForPowerState(TuyaConnection $connection, string $deviceId, bool $expected): ?bool
+    {
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $current = $this->fetchDevicePowerState($connection, $deviceId);
+
+            if ($current === $expected) {
+                return $current;
+            }
+
+            usleep(300000);
+        }
+
+        return $this->fetchDevicePowerState($connection, $deviceId);
     }
 
     private function shouldRefreshTuyaToken($response, array $payload): bool
