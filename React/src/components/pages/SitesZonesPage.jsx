@@ -13,9 +13,34 @@ export default function SitesZonesPage() {
     const [feedback, setFeedback] = useState('');
     const [form, setForm] = useState({ name: '', description: '' });
 
+    const loadRoomsFromTuya = async ({ silent = false } = {}) => {
+        try {
+            const response = await sitesZonesService.syncTuyaRooms();
+            const syncedRooms = response?.data?.data;
+
+            if (!silent && Array.isArray(syncedRooms) && syncedRooms.length > 0) {
+                setFeedback(`${syncedRooms.length} piece(s) Tuya synchronisee(s).`);
+            }
+
+            return true;
+        } catch (err) {
+            const message = err.response?.data?.message || '';
+
+            if (!silent && message) {
+                setError(message);
+            }
+
+            return false;
+        }
+    };
+
     const devicesById = useMemo(() => {
         return new Map(devices.map((device) => [device.id, device]));
     }, [devices]);
+
+    const tuyaRooms = useMemo(() => {
+        return rooms.filter((room) => Boolean(room.tuyaRoomId));
+    }, [rooms]);
 
     const loadRooms = async () => {
         setLoadingRooms(true);
@@ -46,8 +71,13 @@ export default function SitesZonesPage() {
     };
 
     useEffect(() => {
-        loadRooms();
-        loadDevices();
+        const bootstrap = async () => {
+            setError('');
+            await loadRoomsFromTuya({ silent: true });
+            await Promise.all([loadRooms(), loadDevices()]);
+        };
+
+        bootstrap();
     }, []);
 
     const handleCreateRoom = async (event) => {
@@ -199,14 +229,45 @@ export default function SitesZonesPage() {
                         <button
                             type="button"
                             className="refresh-button"
-                            onClick={() => {
-                                loadRooms();
-                                loadDevices();
+                            onClick={async () => {
+                                setError('');
+                                setFeedback('');
+                                await loadRoomsFromTuya();
+                                await Promise.all([loadRooms(), loadDevices()]);
                             }}
                             disabled={loadingRooms || loadingDevices}
                         >
                             {(loadingRooms || loadingDevices) ? 'Chargement...' : 'Rafraichir'}
                         </button>
+                    </div>
+
+                    <div className="tuya-rooms-panel">
+                        <div className="tuya-rooms-panel-head">
+                            <h3>Pieces Tuya detectees</h3>
+                            <span>{tuyaRooms.length}</span>
+                        </div>
+
+                        {loadingRooms && <p className="tuya-hint">Lecture des pieces Tuya...</p>}
+
+                        {!loadingRooms && tuyaRooms.length === 0 && (
+                            <p className="tuya-hint">
+                                Aucune piece Tuya detectee. Verifiez Home ID puis cliquez sur Rafraichir.
+                            </p>
+                        )}
+
+                        {!loadingRooms && tuyaRooms.length > 0 && (
+                            <div className="tuya-rooms-list">
+                                {tuyaRooms.map((room) => (
+                                    <article key={`tuya-${room.id}`} className="tuya-room-item">
+                                        <p className="tuya-room-name">{room.name}</p>
+                                        <p className="tuya-room-meta">
+                                            ID Tuya: {room.tuyaRoomId}
+                                            {room.syncedAt ? ` • Sync: ${new Date(room.syncedAt).toLocaleString()}` : ''}
+                                        </p>
+                                    </article>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     {loadingRooms && <p className="tuya-hint">Chargement des pieces...</p>}

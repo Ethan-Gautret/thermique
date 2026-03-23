@@ -30,6 +30,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::prefix('sites-zones')->group(function () {
         Route::get('/rooms', [SiteZoneController::class, 'index']);
+        Route::post('/sync-tuya', [SiteZoneController::class, 'syncFromTuya']);
         Route::post('/rooms', [SiteZoneController::class, 'store']);
         Route::put('/rooms/{room}', [SiteZoneController::class, 'update']);
         Route::delete('/rooms/{room}', [SiteZoneController::class, 'destroy']);

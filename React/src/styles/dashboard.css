@@ -900,6 +900,62 @@ a {
     cursor: not-allowed;
 }
 
+.tuya-rooms-panel {
+    border: 1px solid #fde68a;
+    background: linear-gradient(180deg, #fffdf2, #fffaf0);
+    border-radius: 12px;
+    padding: 0.75rem;
+    display: grid;
+    gap: 0.6rem;
+}
+
+.tuya-rooms-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.tuya-rooms-panel-head h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #78350f;
+}
+
+.tuya-rooms-panel-head span {
+    border-radius: 999px;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+}
+
+.tuya-rooms-list {
+    display: grid;
+    gap: 0.5rem;
+}
+
+.tuya-room-item {
+    border: 1px solid #fef3c7;
+    background: #fff;
+    border-radius: 10px;
+    padding: 0.5rem 0.6rem;
+}
+
+.tuya-room-name {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #1f2937;
+}
+
+.tuya-room-meta {
+    margin: 0.2rem 0 0;
+    font-size: 0.76rem;
+    color: #6b7280;
+}
+
 .rooms-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

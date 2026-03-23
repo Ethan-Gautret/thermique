@@ -30,6 +30,92 @@ class SiteZoneController extends Controller
         ]);
     }
 
+    /**
+     * Synchronise les pièces depuis l'API Tuya Cloud
+     */
+    public function syncFromTuya()
+    {
+        $connection = TuyaConnection::where('user_id', Auth::id())->first();
+
+        if (!$connection) {
+            return response()->json([
+                'message' => 'Aucune connexion Tuya configurée.',
+            ], 400);
+        }
+
+        if (empty($connection->home_id)) {
+            return response()->json([
+                'message' => 'Home ID manquant. Veuillez le configurer dans les paramètres.',
+            ], 400);
+        }
+
+        try {
+            $tuyaRooms = $this->fetchTuyaRooms($connection);
+
+            if (empty($tuyaRooms)) {
+                return response()->json([
+                    'message' => 'Aucune pièce trouvée sur Tuya.',
+                    'data' => [],
+                ]);
+            }
+
+            $synced = [];
+            foreach ($tuyaRooms as $tuyaRoom) {
+                $room = Room::updateOrCreate(
+                    [
+                        'user_id' => Auth::id(),
+                        'tuya_room_id' => $tuyaRoom['id'] ?? $tuyaRoom['room_id'],
+                    ],
+                    [
+                        'name' => $tuyaRoom['name'],
+                        'description' => $tuyaRoom['description'] ?? null,
+                        'synced_at' => now(),
+                    ]
+                );
+                $synced[] = $this->transformRoom($room);
+            }
+
+            return response()->json([
+                'message' => 'Synchronisation réussie: ' . count($synced) . ' pièce(s) importée(s).',
+                'data' => $synced,
+            ]);
+        } catch (\Exception $e) {
+            Log::warning('Tuya rooms sync failed', [
+                'user_id' => Auth::id(),
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Erreur lors de la synchronisation: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Récupère les pièces depuis l'API Tuya Cloud
+     */
+    private function fetchTuyaRooms(TuyaConnection $connection): array
+    {
+        $paths = [
+            "/v1.0/iot-03/homes/{$connection->home_id}/rooms",
+            "/v1.0/homes/{$connection->home_id}/rooms",
+            "/v1.0/iot-03/families/{$connection->home_id}/rooms",
+            "/v1.0/families/{$connection->home_id}/rooms",
+        ];
+
+        foreach ($paths as $path) {
+            $response = $this->tuyaSignedRequest($connection, 'GET', $path);
+            $payload = $response->json() ?: [];
+
+            if ($this->isTuyaSuccess($response, $payload)) {
+                $result = $payload['result'] ?? [];
+                return is_array($result) ? $result : [];
+            }
+        }
+
+        return [];
+    }
+
     public function store(Request $request)
     {
         $validated = $request->validate([
