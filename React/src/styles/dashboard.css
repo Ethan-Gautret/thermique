@@ -135,6 +135,60 @@ a {
     font-weight: 700;
 }
 
+.sidebar-footer {
+    margin-top: auto;
+    padding: 0.75rem 0.5rem 0.2rem;
+    border-top: 1px solid #fde7cf;
+    display: grid;
+    gap: 0.55rem;
+    background: linear-gradient(180deg, #fffaf3 0%, #fff3e8 100%);
+    border-radius: 12px;
+}
+
+.user-line {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    background: #fff7ed;
+}
+
+.user-line p {
+    margin: 0;
+    font-size: 1.02rem;
+    font-weight: 600;
+    color: #9a3412;
+    line-height: 1.2;
+}
+
+.user-line small {
+    margin: 0;
+    color: #7c2d12;
+    font-size: 0.82rem;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.sidebar-footer button {
+    border: 1px solid #fdba74;
+    background: #fff;
+    color: #9a3412;
+    font-size: 0.95rem;
+    font-weight: 600;
+    text-align: center;
+    padding: 0.45rem 0.65rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.sidebar-footer button:hover {
+    background: #fff1e6;
+    border-color: #fb923c;
+    color: #c2410c;
+}
+
 .mobile-bar {
     display: none;
 }
