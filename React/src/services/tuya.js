@@ -18,6 +18,10 @@ export const tuyaService = {
   getDevices: () =>
     api.get('/tuya/devices'),
 
+  // Récupérer la série horaire de température de la journée
+  getDailyTemperatureSeries: () =>
+    api.get('/tuya/temperature/daily-series'),
+
   // Déconnecter Tuya
   disconnectTuya: () => api.post('/tuya/disconnect').then((res) => res.data),
 

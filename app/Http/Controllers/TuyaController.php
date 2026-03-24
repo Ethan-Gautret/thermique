@@ -4,11 +4,13 @@ namespace App\Http\Controllers;
 
 use App\Models\Device;
 use App\Models\Room;
+use App\Models\TemperatureReading;
 use App\Models\TuyaConnection;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class TuyaController extends Controller
 {
@@ -648,6 +650,116 @@ class TuyaController extends Controller
     }
 
     /**
+     * Retourne une série horaire glissante et conserve uniquement les 24 dernières heures.
+     * Un snapshot est enregistré à l'heure courante pour chaque équipement disposant d'une température.
+     */
+    public function getDailyTemperatureSeries(Request $request)
+    {
+        $userId = (int) Auth::id();
+
+        if ($userId <= 0) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+
+        $devicesResponse = $this->getDevices($request);
+        if ($devicesResponse->getStatusCode() !== 200) {
+            return $devicesResponse;
+        }
+
+        $payload = $devicesResponse->getData(true);
+        $devices = is_array($payload['data'] ?? null) ? $payload['data'] : [];
+
+        $nowUtc = now('UTC');
+        $hourBucket = $nowUtc->copy()->startOfHour();
+        $snapshotRows = [];
+
+        foreach ($devices as $device) {
+            if (!is_array($device)) {
+                continue;
+            }
+
+            $deviceId = (string) ($device['id'] ?? '');
+            if ($deviceId === '') {
+                continue;
+            }
+
+            $temperature = $this->extractTemperatureFromProperties($device['properties'] ?? []);
+            if (!is_numeric($temperature)) {
+                continue;
+            }
+
+            $snapshotRows[] = [
+                'user_id' => $userId,
+                'tuya_device_id' => $deviceId,
+                'recorded_at' => $nowUtc,
+                'hour_bucket' => $hourBucket,
+                'value_celsius' => round((float) $temperature, 2),
+                'created_at' => $nowUtc,
+                'updated_at' => $nowUtc,
+            ];
+        }
+
+        if (!empty($snapshotRows)) {
+            TemperatureReading::upsert(
+                $snapshotRows,
+                ['user_id', 'tuya_device_id', 'hour_bucket'],
+                ['recorded_at', 'value_celsius', 'updated_at']
+            );
+        }
+
+        $retentionCutoff = $nowUtc->copy()->subHours(24);
+
+        // Purge des données hors fenêtre glissante 24h.
+        TemperatureReading::query()
+            ->where('user_id', $userId)
+            ->where('hour_bucket', '<=', $retentionCutoff)
+            ->delete();
+
+        $windowStart = $nowUtc->copy()->subHours(24);
+        $windowEnd = $nowUtc->copy();
+
+        $hourlyRows = TemperatureReading::query()
+            ->select([
+                DB::raw("DATE_FORMAT(hour_bucket, '%Y-%m-%d %H:00:00') as hour_bucket"),
+                DB::raw('AVG(value_celsius) as avg_temperature'),
+                DB::raw('COUNT(*) as readings_count'),
+                DB::raw('COUNT(DISTINCT tuya_device_id) as devices_count'),
+            ])
+            ->where('user_id', $userId)
+            ->where('hour_bucket', '>', $windowStart)
+            ->where('hour_bucket', '<=', $windowEnd)
+            ->groupBy('hour_bucket')
+            ->orderBy('hour_bucket')
+            ->get();
+
+        $series = $hourlyRows->map(function ($row) {
+            $hourBucketValue = (string) ($row->hour_bucket ?? '');
+            $hourDate = strtotime($hourBucketValue);
+            $label = $hourDate ? gmdate('H:i', $hourDate) : substr($hourBucketValue, 11, 5);
+
+            return [
+                'label' => $label,
+                'value' => round((float) $row->avg_temperature, 1),
+                'devicesCount' => (int) $row->devices_count,
+                'readingsCount' => (int) $row->readings_count,
+                'hourBucket' => $hourBucketValue,
+            ];
+        })->values();
+
+        return response()->json([
+            'data' => [
+                'series' => $series,
+                'meta' => [
+                    'windowStart' => $windowStart->toDateTimeString(),
+                    'windowEnd' => $windowEnd->toDateTimeString(),
+                    'hoursWithData' => $series->count(),
+                ],
+            ],
+            'message' => 'Série horaire récupérée avec succès',
+        ]);
+    }
+
+    /**
      * Mettre à jour la catégorie d'un équipement
      */
     public function updateDeviceCategory(Request $request, $deviceId)
@@ -869,6 +981,49 @@ class TuyaController extends Controller
         }
 
         return date('Y-m-d H:i:s', $timestamp);
+    }
+
+    private function extractTemperatureFromProperties($properties): ?float
+    {
+        if (!is_array($properties)) {
+            return null;
+        }
+
+        $temperatureCodes = ['va_temperature', 'temp_current', 'temperature', 'cur_temperature', 'cur_temp'];
+
+        foreach ($properties as $property) {
+            if (!is_array($property)) {
+                continue;
+            }
+
+            $code = strtolower((string) ($property['code'] ?? ''));
+            if ($code === '') {
+                continue;
+            }
+
+            $matchesTemperatureCode = false;
+            foreach ($temperatureCodes as $pattern) {
+                if (str_contains($code, $pattern)) {
+                    $matchesTemperatureCode = true;
+                    break;
+                }
+            }
+
+            if (!$matchesTemperatureCode) {
+                continue;
+            }
+
+            $rawValue = $property['value'] ?? null;
+            if (!is_numeric($rawValue)) {
+                return null;
+            }
+
+            $numericValue = (float) $rawValue;
+            $needsDecimalScale = str_contains($code, 'va_temperature') || abs($numericValue) > 70;
+            return $needsDecimalScale ? $numericValue / 10 : $numericValue;
+        }
+
+        return null;
     }
 
     private function tuyaSignedGet(TuyaConnection $connection, string $path)
