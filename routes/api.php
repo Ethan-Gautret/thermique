@@ -25,6 +25,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/devices', [TuyaController::class, 'getDevices']);
         Route::post('/device/control', [TuyaController::class, 'controlDevice']);
         Route::put('/devices/{deviceId}/category', [TuyaController::class, 'updateDeviceCategory']);
+        Route::delete('/devices/{deviceId}', [TuyaController::class, 'deleteDevice']);
         Route::post('/disconnect', [TuyaController::class, 'disconnect']);
     });
 

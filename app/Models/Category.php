@@ -27,4 +27,9 @@ class Category extends Model
     {
         return $this->hasMany(Room::class);
     }
+
+    public function devices()
+    {
+        return $this->hasMany(Device::class);
+    }
 }

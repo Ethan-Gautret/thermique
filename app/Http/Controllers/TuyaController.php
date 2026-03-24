@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Device;
 use App\Models\Room;
 use App\Models\TuyaConnection;
 use Illuminate\Http\Request;
@@ -445,20 +446,11 @@ class TuyaController extends Controller
                 ? $result
                 : ($result['list'] ?? []);
 
-            $rooms = Room::where('user_id', Auth::id())
-                ->get(['id', 'category_id', 'device_ids']);
+            $userId = (int) Auth::id();
+            $legacyCategoryById = $this->getRoomDeviceCategoryMap($userId);
+            $persistedCategoryById = $this->syncDetectedDevices($userId, $rawDevices, $legacyCategoryById);
 
-            $deviceCategoryById = [];
-            foreach ($rooms as $room) {
-                $deviceIds = is_array($room->device_ids) ? $room->device_ids : [];
-                foreach ($deviceIds as $id) {
-                    if (is_scalar($id) && (string) $id !== '') {
-                        $deviceCategoryById[(string) $id] = $room->category_id;
-                    }
-                }
-            }
-
-            $devices = collect($rawDevices)->map(function ($device) use ($connection, $deviceCategoryById) {
+            $devices = collect($rawDevices)->map(function ($device) use ($connection, $persistedCategoryById) {
                 $powerState = null;
                 
                 // Récupérer l'état on/off de l'appareil
@@ -523,7 +515,7 @@ class TuyaController extends Controller
                     'id' => $device['id'] ?? null,
                     'name' => $device['name'] ?? 'Equipement sans nom',
                     'category' => $device['category'] ?? 'inconnu',
-                    'category_id' => isset($device['id']) ? ($deviceCategoryById[(string) $device['id']] ?? null) : null,
+                    'category_id' => isset($device['id']) ? ($persistedCategoryById[(string) $device['id']] ?? null) : null,
                     'online' => (bool) ($device['isOnline'] ?? $device['online'] ?? false),
                     'powerOn' => $powerState,
                     'model' => $device['model'] ?? null,
@@ -630,7 +622,10 @@ class TuyaController extends Controller
      */
     public function disconnect(Request $request)
     {
-        TuyaConnection::where('user_id', Auth::id())->delete();
+        $userId = (int) Auth::id();
+
+        TuyaConnection::where('user_id', $userId)->delete();
+        Device::where('user_id', $userId)->delete();
 
         return response()->json(['message' => 'Déconnexion Tuya réussie']);
     }
@@ -645,21 +640,6 @@ class TuyaController extends Controller
                 'category_id' => 'nullable|integer|exists:categories,id',
             ]);
 
-            // Chercher un room qui contient déjà cet appareil Tuya
-            $room = Room::where('user_id', $request->user()->id)
-                ->whereJsonContains('device_ids', (string) $deviceId)
-                ->first();
-
-            // Si aucun room n'existe pour cet appareil, en créer un dédié
-            if (!$room) {
-                $room = Room::create([
-                    'user_id' => $request->user()->id,
-                    'name' => 'Appareil ' . $deviceId,
-                    'device_ids' => [(string) $deviceId],
-                    'category_id' => null,
-                ]);
-            }
-
             // Vérifier que la catégorie (si fournie) appartient à l'utilisateur
             $categoryId = $validated['category_id'] ?? null;
             if ($categoryId) {
@@ -669,13 +649,20 @@ class TuyaController extends Controller
                     ->firstOrFail();
             }
 
-            $room->update([
-                'category_id' => $categoryId,
-            ]);
+            $device = Device::updateOrCreate(
+                [
+                    'user_id' => $request->user()->id,
+                    'tuya_device_id' => (string) $deviceId,
+                ],
+                [
+                    'category_id' => $categoryId,
+                    'synced_at' => now(),
+                ]
+            );
 
             return response()->json([
                 'message' => 'Catégorie de l\'équipement mise à jour avec succès',
-                'data' => $room,
+                'data' => $device,
             ]);
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
             return response()->json([
@@ -690,6 +677,181 @@ class TuyaController extends Controller
                 'message' => 'Erreur lors de la mise à jour de la catégorie',
             ], 500);
         }
+    }
+
+    /**
+     * Supprimer un équipement localement (site + base) et retirer ses liens des pièces.
+     */
+    public function deleteDevice(Request $request, $deviceId)
+    {
+        try {
+            $userId = (int) $request->user()->id;
+            $deviceId = (string) $deviceId;
+
+            $deleted = Device::where('user_id', $userId)
+                ->where('tuya_device_id', $deviceId)
+                ->delete();
+
+            $this->removeDeviceIdFromRooms($userId, $deviceId);
+
+            return response()->json([
+                'message' => $deleted > 0
+                    ? 'Équipement supprimé de la base locale.'
+                    : 'Équipement déjà absent de la base locale.',
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error deleting device', [
+                'device_id' => $deviceId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Erreur lors de la suppression de l\'équipement',
+            ], 500);
+        }
+    }
+
+    private function getRoomDeviceCategoryMap(int $userId): array
+    {
+        $rooms = Room::where('user_id', $userId)
+            ->get(['category_id', 'device_ids']);
+
+        $deviceCategoryById = [];
+
+        foreach ($rooms as $room) {
+            $deviceIds = is_array($room->device_ids) ? $room->device_ids : [];
+
+            foreach ($deviceIds as $id) {
+                if (is_scalar($id) && (string) $id !== '') {
+                    $deviceCategoryById[(string) $id] = $room->category_id;
+                }
+            }
+        }
+
+        return $deviceCategoryById;
+    }
+
+    private function syncDetectedDevices(int $userId, array $rawDevices, array $legacyCategoryById): array
+    {
+        $now = now();
+        $existingByDeviceId = Device::where('user_id', $userId)
+            ->get(['tuya_device_id', 'category_id'])
+            ->keyBy('tuya_device_id');
+
+        $upsertRows = [];
+        $detectedDeviceIds = [];
+
+        foreach ($rawDevices as $rawDevice) {
+            if (!is_array($rawDevice) || !isset($rawDevice['id'])) {
+                continue;
+            }
+
+            $tuyaDeviceId = (string) $rawDevice['id'];
+            if ($tuyaDeviceId === '') {
+                continue;
+            }
+
+            $detectedDeviceIds[] = $tuyaDeviceId;
+
+            $existingDevice = $existingByDeviceId->get($tuyaDeviceId);
+            $categoryId = $existingDevice?->category_id
+                ?? ($legacyCategoryById[$tuyaDeviceId] ?? null);
+
+            $upsertRows[] = [
+                'user_id' => $userId,
+                'tuya_device_id' => $tuyaDeviceId,
+                'category_id' => $categoryId,
+                'name' => $rawDevice['name'] ?? null,
+                'model' => $rawDevice['model'] ?? null,
+                'product_name' => $rawDevice['productName'] ?? null,
+                'ip' => $rawDevice['ip'] ?? null,
+                'is_online' => (bool) ($rawDevice['isOnline'] ?? $rawDevice['online'] ?? false),
+                'last_seen_at' => $this->parseTuyaTimestamp($rawDevice['updateTime'] ?? null),
+                'synced_at' => $now,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (!empty($upsertRows)) {
+            Device::upsert(
+                $upsertRows,
+                ['user_id', 'tuya_device_id'],
+                [
+                    'category_id',
+                    'name',
+                    'model',
+                    'product_name',
+                    'ip',
+                    'is_online',
+                    'last_seen_at',
+                    'synced_at',
+                    'updated_at',
+                ]
+            );
+        }
+
+        $detectedDeviceIds = array_values(array_unique($detectedDeviceIds));
+
+        $staleQuery = Device::where('user_id', $userId);
+        if (!empty($detectedDeviceIds)) {
+            $staleQuery->whereNotIn('tuya_device_id', $detectedDeviceIds);
+        }
+
+        $staleDeviceIds = $staleQuery->pluck('tuya_device_id')->all();
+        if (!empty($staleDeviceIds)) {
+            foreach ($staleDeviceIds as $staleDeviceId) {
+                $this->removeDeviceIdFromRooms($userId, (string) $staleDeviceId);
+            }
+
+            Device::where('user_id', $userId)
+                ->whereIn('tuya_device_id', $staleDeviceIds)
+                ->delete();
+        }
+
+        return Device::where('user_id', $userId)
+            ->get(['tuya_device_id', 'category_id'])
+            ->pluck('category_id', 'tuya_device_id')
+            ->all();
+    }
+
+    private function removeDeviceIdFromRooms(int $userId, string $deviceId): void
+    {
+        $rooms = Room::where('user_id', $userId)
+            ->whereJsonContains('device_ids', $deviceId)
+            ->get(['id', 'device_ids']);
+
+        foreach ($rooms as $room) {
+            $deviceIds = is_array($room->device_ids) ? $room->device_ids : [];
+            $nextDeviceIds = array_values(array_filter($deviceIds, function ($currentId) use ($deviceId) {
+                return (string) $currentId !== $deviceId;
+            }));
+
+            if ($nextDeviceIds !== $deviceIds) {
+                $room->device_ids = $nextDeviceIds;
+                $room->save();
+            }
+        }
+    }
+
+    private function parseTuyaTimestamp($value): ?string
+    {
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $timestamp = (int) $value;
+
+        // Tuya renvoie souvent les dates en millisecondes.
+        if ($timestamp > 2000000000) {
+            $timestamp = (int) floor($timestamp / 1000);
+        }
+
+        if ($timestamp <= 0) {
+            return null;
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
     }
 
     private function tuyaSignedGet(TuyaConnection $connection, string $path)

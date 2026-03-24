@@ -3,8 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\Category;
+use App\Models\Device;
+use App\Models\Room;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class CategoryController extends Controller
@@ -134,7 +137,17 @@ class CategoryController extends Controller
         }
 
         try {
-            $category->delete();
+            DB::transaction(function () use ($category) {
+                Room::where('user_id', $category->user_id)
+                    ->where('category_id', $category->id)
+                    ->update(['category_id' => null]);
+
+                Device::where('user_id', $category->user_id)
+                    ->where('category_id', $category->id)
+                    ->update(['category_id' => null]);
+
+                $category->delete();
+            });
 
             return response()->json([
                 'message' => 'Catégorie supprimée avec succès',

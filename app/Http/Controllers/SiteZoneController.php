@@ -61,13 +61,24 @@ class SiteZoneController extends Controller
 
             $synced = [];
             foreach ($tuyaRooms as $tuyaRoom) {
+                if (!is_array($tuyaRoom)) {
+                    continue;
+                }
+
+                $tuyaRoomId = $tuyaRoom['id'] ?? $tuyaRoom['room_id'] ?? null;
+                $tuyaRoomName = $tuyaRoom['name'] ?? null;
+
+                if (!is_scalar($tuyaRoomId) || !is_scalar($tuyaRoomName)) {
+                    continue;
+                }
+
                 $room = Room::updateOrCreate(
                     [
                         'user_id' => Auth::id(),
-                        'tuya_room_id' => $tuyaRoom['id'] ?? $tuyaRoom['room_id'],
+                        'tuya_room_id' => (string) $tuyaRoomId,
                     ],
                     [
-                        'name' => $tuyaRoom['name'],
+                        'name' => (string) $tuyaRoomName,
                         'description' => $tuyaRoom['description'] ?? null,
                         'synced_at' => now(),
                     ]
@@ -109,7 +120,26 @@ class SiteZoneController extends Controller
 
             if ($this->isTuyaSuccess($response, $payload)) {
                 $result = $payload['result'] ?? [];
-                return is_array($result) ? $result : [];
+
+                if (!is_array($result)) {
+                    return [];
+                }
+
+                if (array_is_list($result)) {
+                    return $result;
+                }
+
+                foreach (['list', 'rooms', 'data'] as $key) {
+                    if (isset($result[$key]) && is_array($result[$key])) {
+                        return $result[$key];
+                    }
+                }
+
+                if (isset($result['id']) || isset($result['room_id'])) {
+                    return [$result];
+                }
+
+                return [];
             }
         }
 

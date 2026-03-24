@@ -28,6 +28,10 @@ export const tuyaService = {
   // Mettre à jour la catégorie d'un équipement
   updateDeviceCategory: (tuyaDeviceId, categoryId) =>
     api.put(`/tuya/devices/${tuyaDeviceId}/category`, { category_id: categoryId }),
+
+  // Supprimer un équipement côté site (et base locale)
+  deleteDevice: (tuyaDeviceId) =>
+    api.delete(`/tuya/devices/${tuyaDeviceId}`),
 };
 
 export default tuyaService;

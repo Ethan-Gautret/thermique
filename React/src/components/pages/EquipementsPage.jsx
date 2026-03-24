@@ -58,6 +58,20 @@ export default function EquipementsPage() {
         }
     };
 
+    const handleDeleteDevice = async (deviceId) => {
+        if (!window.confirm('Supprimer cet équipement du site et de la base locale ?')) {
+            return;
+        }
+
+        try {
+            await tuyaService.deleteDevice(deviceId);
+            await loadDevices();
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de supprimer cet équipement.';
+            setError(message);
+        }
+    };
+
     const sendPowerCommand = async (deviceId, nextPowerOn) => {
         const commandCandidates = ['switch_led', 'switch_1', 'switch'];
         let lastError = null;
@@ -216,6 +230,13 @@ export default function EquipementsPage() {
                         onClick={() => setEditingDevice(device)}
                     >
                         Modifier
+                    </button>
+                    <button
+                        type="button"
+                        className="btn-delete-device"
+                        onClick={() => handleDeleteDevice(device.id)}
+                    >
+                        Supprimer
                     </button>
                 </div>
             </article>

@@ -683,6 +683,27 @@ a {
     transform: translateY(1px);
 }
 
+.btn-delete-device {
+    padding: 0.5rem 0.9rem;
+    background-color: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-delete-device:hover {
+    background-color: #dc2626;
+    box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);
+}
+
+.btn-delete-device:active {
+    transform: translateY(1px);
+}
+
 .category-creation-panel {
     background: white;
     border: 1px solid #e5e7eb;
