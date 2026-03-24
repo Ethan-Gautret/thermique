@@ -12,6 +12,7 @@ export default function EquipementsPage() {
     const [categories, setCategories] = useState([]);
     const [controllingDeviceId, setControllingDeviceId] = useState(null);
     const [editingDevice, setEditingDevice] = useState(null);
+    const [infoDevice, setInfoDevice] = useState(null);
     const [showCategoryForm, setShowCategoryForm] = useState(false);
     const [newCategory, setNewCategory] = useState({
         name: '',
@@ -165,9 +166,88 @@ export default function EquipementsPage() {
 
     const categoriesList = Array.isArray(categories) ? categories : [];
 
+    const metricDefinitions = [
+        {
+            key: 'temperature',
+            label: 'Temperature',
+            unit: '°C',
+            icon: '🌡️',
+            codes: ['va_temperature', 'temp_current', 'temperature', 'cur_temperature', 'cur_temp'],
+        },
+        {
+            key: 'humidity',
+            label: 'Humidite',
+            unit: '%',
+            icon: '💧',
+            codes: ['va_humidity', 'humidity', 'humid', 'cur_humidity'],
+        },
+        {
+            key: 'co2',
+            label: 'CO2',
+            unit: 'ppm',
+            icon: '🫧',
+            codes: ['co2', 'carbon_dioxide'],
+        },
+        {
+            key: 'illuminance',
+            label: 'Luminosite',
+            unit: 'lx',
+            icon: '💡',
+            codes: ['illuminance', 'bright', 'lux'],
+        },
+    ];
+
+    const normalizeMetricValue = (definition, code, rawValue) => {
+        const numericValue = Number(rawValue);
+
+        if (!Number.isFinite(numericValue)) {
+            return String(rawValue ?? '-');
+        }
+
+        if (definition.key === 'temperature') {
+            const needsDecimalScale = code.includes('va_temperature') || Math.abs(numericValue) > 70;
+            const value = needsDecimalScale ? numericValue / 10 : numericValue;
+            return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} ${definition.unit}`;
+        }
+
+        if (definition.key === 'humidity') {
+            const value = numericValue > 100 ? numericValue / 10 : numericValue;
+            return `${Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)} ${definition.unit}`;
+        }
+
+        return `${numericValue} ${definition.unit}`;
+    };
+
+    const getPrimaryMetrics = (device) => {
+        const properties = Array.isArray(device.properties) ? device.properties : [];
+
+        return metricDefinitions
+            .map((definition) => {
+                const match = properties.find((property) => {
+                    const code = String(property?.code || '').toLowerCase();
+                    return definition.codes.some((pattern) => code.includes(pattern));
+                });
+
+                if (!match) {
+                    return null;
+                }
+
+                const code = String(match.code || '').toLowerCase();
+                return {
+                    key: definition.key,
+                    label: definition.label,
+                    icon: definition.icon,
+                    value: normalizeMetricValue(definition, code, match.value),
+                };
+            })
+            .filter(Boolean);
+    };
+
     const renderDeviceCard = (device) => {
         const isControlling = controllingDeviceId === device.id;
         const canControl = device.online && !isControlling;
+        const primaryMetrics = getPrimaryMetrics(device);
+        const rawProperties = Array.isArray(device.properties) ? device.properties : [];
 
         return (
             <article key={device.id} className="equipment-card">
@@ -180,8 +260,8 @@ export default function EquipementsPage() {
 
                 <dl className="equipment-meta">
                     <div>
-                        <dt>ID</dt>
-                        <dd>{device.id}</dd>
+                        <dt>IP</dt>
+                        <dd>{device.ip || '-'}</dd>
                     </div>
                     <div>
                         <dt>Modele</dt>
@@ -208,13 +288,36 @@ export default function EquipementsPage() {
                             )}
                         </dd>
                     </div>
-                    <div>
-                        <dt>IP</dt>
-                        <dd>{device.ip || '-'}</dd>
+                    <div className="equipment-properties-block">
+                        <dt>Fonctionnalites principales</dt>
+                        <dd>
+                            {primaryMetrics.length > 0 ? (
+                                <div className="equipment-primary-metrics">
+                                    {primaryMetrics.map((metric) => (
+                                        <div key={metric.key} className="primary-metric-card">
+                                            <span className="metric-icon" aria-hidden="true">{metric.icon}</span>
+                                            <span className="metric-label">{metric.label}</span>
+                                            <strong className="metric-value">{metric.value}</strong>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <span>Aucune mesure principale disponible</span>
+                            )}
+                        </dd>
                     </div>
                 </dl>
 
                 <div className="equipment-footer">
+                    <button
+                        type="button"
+                        className="btn-info-device"
+                        onClick={() => setInfoDevice(device)}
+                        title="Voir toutes les informations"
+                        aria-label="Voir toutes les informations"
+                    >
+                        i
+                    </button>
                     <button
                         type="button"
                         className={`btn-power-toggle ${device.powerOn ? 'off' : 'on'}`}
@@ -239,6 +342,10 @@ export default function EquipementsPage() {
                         Supprimer
                     </button>
                 </div>
+
+                {rawProperties.length > 0 && (
+                    <p className="equipment-hint-info">Clique sur i pour voir toutes les donnees capteur.</p>
+                )}
             </article>
         );
     };
@@ -385,6 +492,76 @@ export default function EquipementsPage() {
                     onClose={() => setEditingDevice(null)}
                     onSave={handleSaveDeviceCategory}
                 />
+            )}
+
+            {infoDevice && (
+                <div className="modal-overlay" onClick={() => setInfoDevice(null)}>
+                    <div className="modal-content equipment-info-modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Informations equipement</h2>
+                            <button
+                                type="button"
+                                className="close-button"
+                                onClick={() => setInfoDevice(null)}
+                                aria-label="Fermer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="modal-body">
+                            <dl className="equipment-full-meta">
+                                <div>
+                                    <dt>Nom</dt>
+                                    <dd>{infoDevice.name || '-'}</dd>
+                                </div>
+                                <div>
+                                    <dt>IP</dt>
+                                    <dd>{infoDevice.ip || '-'}</dd>
+                                </div>
+                                <div>
+                                    <dt>Modele</dt>
+                                    <dd>{infoDevice.model || '-'}</dd>
+                                </div>
+                                <div>
+                                    <dt>Produit</dt>
+                                    <dd>{infoDevice.productName || '-'}</dd>
+                                </div>
+                                <div>
+                                    <dt>Statut</dt>
+                                    <dd>{infoDevice.online ? 'En ligne' : 'Hors ligne'}</dd>
+                                </div>
+                                <div>
+                                    <dt>Alimentation</dt>
+                                    <dd>
+                                        {infoDevice.powerOn === null
+                                            ? 'Inconnue'
+                                            : (infoDevice.powerOn ? 'Allume' : 'Eteint')}
+                                    </dd>
+                                </div>
+                            </dl>
+
+                            <div className="equipment-full-properties">
+                                <h3>Toutes les donnees capteur</h3>
+                                {Array.isArray(infoDevice.properties) && infoDevice.properties.length > 0 ? (
+                                    <ul>
+                                        {infoDevice.properties.map((property) => (
+                                            <li key={property.code}>
+                                                <span>{property.name || property.code}</span>
+                                                <strong>
+                                                    {String(property.value ?? '-')}
+                                                    {property.unit ? ` ${property.unit}` : ''}
+                                                </strong>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                ) : (
+                                    <p>Aucune donnee detaillee disponible.</p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
         </section>
     );

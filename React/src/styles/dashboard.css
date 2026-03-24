@@ -606,6 +606,10 @@ a {
     padding: 0.45rem 0.55rem;
 }
 
+.equipment-properties-block {
+    grid-column: 1 / -1;
+}
+
 .equipment-meta dt {
     margin: 0;
     font-size: 0.72rem;
@@ -617,6 +621,41 @@ a {
     font-size: 0.8rem;
     color: #0f172a;
     word-break: break-word;
+}
+
+.equipment-primary-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+    gap: 0.55rem;
+}
+
+.primary-metric-card {
+    background: linear-gradient(160deg, #f8fafc 0%, #eef6ff 100%);
+    border: 1px solid #dbeafe;
+    border-radius: 10px;
+    padding: 0.5rem 0.6rem;
+    display: grid;
+    gap: 0.2rem;
+    align-content: start;
+}
+
+.metric-icon {
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.metric-label {
+    color: #475569;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-weight: 600;
+}
+
+.metric-value {
+    color: #0f172a;
+    font-size: 0.95rem;
+    font-weight: 700;
 }
 
 .device-state {
@@ -662,6 +701,29 @@ a {
     border-top: 1px solid #edf2f7;
 }
 
+.btn-info-device {
+    width: 32px;
+    height: 32px;
+    border-radius: 999px;
+    border: 1px solid #c7d2fe;
+    background: #eef2ff;
+    color: #3730a3;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-info-device:hover {
+    background: #e0e7ff;
+    transform: translateY(-1px);
+}
+
+.equipment-hint-info {
+    margin: 0.5rem 0 0;
+    font-size: 0.72rem;
+    color: #64748b;
+}
+
 .btn-edit {
     padding: 0.5rem 0.9rem;
     background-color: #6366f1;
@@ -702,6 +764,84 @@ a {
 
 .btn-delete-device:active {
     transform: translateY(1px);
+}
+
+.equipment-info-modal {
+    max-width: 640px;
+}
+
+.equipment-full-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+    margin: 0;
+}
+
+.equipment-full-meta div {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.55rem 0.65rem;
+}
+
+.equipment-full-meta dt {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #64748b;
+}
+
+.equipment-full-meta dd {
+    margin: 0.2rem 0 0;
+    color: #0f172a;
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.equipment-full-properties {
+    margin-top: 1rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.85rem;
+    background: #fcfcff;
+}
+
+.equipment-full-properties h3 {
+    margin: 0 0 0.7rem;
+    font-size: 0.95rem;
+    color: #1e293b;
+}
+
+.equipment-full-properties ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.45rem;
+}
+
+.equipment-full-properties li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    align-items: baseline;
+    border-bottom: 1px dashed #e2e8f0;
+    padding-bottom: 0.35rem;
+}
+
+.equipment-full-properties li span {
+    color: #334155;
+    font-size: 0.8rem;
+}
+
+.equipment-full-properties li strong {
+    color: #0f172a;
+    font-size: 0.83rem;
+}
+
+.equipment-full-properties p {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.85rem;
 }
 
 .category-creation-panel {

@@ -452,6 +452,7 @@ class TuyaController extends Controller
 
             $devices = collect($rawDevices)->map(function ($device) use ($connection, $persistedCategoryById) {
                 $powerState = null;
+                $normalizedProperties = [];
                 
                 // Récupérer l'état on/off de l'appareil
                 try {
@@ -478,6 +479,21 @@ class TuyaController extends Controller
                         ]);
 
                         if (is_array($properties) && !empty($properties)) {
+                            $normalizedProperties = collect($properties)
+                                ->filter(fn ($property) => is_array($property) && isset($property['code']))
+                                ->map(function ($property) {
+                                    return [
+                                        'code' => (string) $property['code'],
+                                        'name' => (string) ($property['name'] ?? $property['code']),
+                                        'value' => $property['value'] ?? null,
+                                        'unit' => isset($property['unit']) && is_scalar($property['unit'])
+                                            ? (string) $property['unit']
+                                            : null,
+                                    ];
+                                })
+                                ->values()
+                                ->all();
+
                             // Chercher la propriété de puissance (power ou switch)
                             foreach ($properties as $property) {
                                 if (isset($property['code'])) {
@@ -522,6 +538,7 @@ class TuyaController extends Controller
                     'productName' => $device['productName'] ?? null,
                     'ip' => $device['ip'] ?? null,
                     'lastSeen' => $device['updateTime'] ?? null,
+                    'properties' => $normalizedProperties,
                 ];
             })->values();
 
