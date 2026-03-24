@@ -144,7 +144,8 @@
 }
 
 .btn-primary,
-.btn-secondary {
+.btn-secondary,
+.btn-danger {
     padding: 0.625rem 1rem;
     border-radius: 6px;
     font-size: 0.95rem;
@@ -182,5 +183,21 @@
 .btn-secondary:disabled {
     background-color: #f3f4f6;
     color: #9ca3af;
+    cursor: not-allowed;
+}
+
+.btn-danger {
+    background-color: #ef4444;
+    color: #ffffff;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background-color: #dc2626;
+    box-shadow: 0 4px 6px rgba(220, 38, 38, 0.15);
+}
+
+.btn-danger:disabled {
+    background-color: #fecaca;
+    color: #991b1b;
     cursor: not-allowed;
 }

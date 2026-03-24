@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 
-export default function EquipmentEditor({ device, categories, onClose, onSave, loading }) {
+export default function EquipmentEditor({ device, categories, onClose, onSave, onDelete, loading }) {
     const [selectedCategoryId, setSelectedCategoryId] = useState(device?.category_id || null);
     const [isSaving, setIsSaving] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const handleSave = async () => {
         setIsSaving(true);
@@ -11,6 +12,20 @@ export default function EquipmentEditor({ device, categories, onClose, onSave, l
             onClose();
         } finally {
             setIsSaving(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (typeof onDelete !== 'function') {
+            return;
+        }
+
+        setIsDeleting(true);
+        try {
+            await onDelete(device.id);
+            onClose();
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -36,7 +51,7 @@ export default function EquipmentEditor({ device, categories, onClose, onSave, l
                             id="equipment-category"
                             value={selectedCategoryId || ''}
                             onChange={(e) => setSelectedCategoryId(e.target.value ? Number(e.target.value) : null)}
-                            disabled={loading || isSaving}
+                            disabled={loading || isSaving || isDeleting}
                         >
                             <option value="">Sans catégorie</option>
                             {categories.map((cat) => (
@@ -72,15 +87,23 @@ export default function EquipmentEditor({ device, categories, onClose, onSave, l
                         type="button"
                         className="btn-secondary"
                         onClick={onClose}
-                        disabled={isSaving}
+                        disabled={isSaving || isDeleting}
                     >
                         Annuler
                     </button>
                     <button
                         type="button"
+                        className="btn-danger"
+                        onClick={handleDelete}
+                        disabled={isSaving || isDeleting || loading}
+                    >
+                        {isDeleting ? 'Suppression...' : 'Supprimer'}
+                    </button>
+                    <button
+                        type="button"
                         className="btn-primary"
                         onClick={handleSave}
-                        disabled={isSaving || loading}
+                        disabled={isSaving || isDeleting || loading}
                     >
                         {isSaving ? 'Sauvegarde...' : 'Enregistrer'}
                     </button>

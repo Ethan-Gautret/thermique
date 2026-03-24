@@ -14,6 +14,10 @@ export default function EquipementsPage() {
     const [editingDevice, setEditingDevice] = useState(null);
     const [infoDevice, setInfoDevice] = useState(null);
     const [showCategoryForm, setShowCategoryForm] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [siteFilter, setSiteFilter] = useState('all');
+    const [statusFilter, setStatusFilter] = useState('all');
+    const [powerFilter, setPowerFilter] = useState('all');
     const [newCategory, setNewCategory] = useState({
         name: '',
         description: '',
@@ -150,21 +154,39 @@ export default function EquipementsPage() {
         }
     };
 
-    const getDevicesByCategory = (categoryId) => {
-        return devices.filter(device => {
-            if (categoryId === null) {
-                return !device.category_id;
-            }
-            return device.category_id === categoryId;
-        });
-    };
-
     useEffect(() => {
         loadDevices();
         loadCategories();
     }, []);
 
     const categoriesList = Array.isArray(categories) ? categories : [];
+    const categoriesById = categoriesList.reduce((acc, category) => {
+        acc[category.id] = category;
+        return acc;
+    }, {});
+
+    const filteredDevices = devices.filter((device) => {
+        const normalizedSearch = searchTerm.trim().toLowerCase();
+        const matchesSearch = normalizedSearch === ''
+            || String(device.name || '').toLowerCase().includes(normalizedSearch)
+            || String(device.model || '').toLowerCase().includes(normalizedSearch)
+            || String(device.ip || '').toLowerCase().includes(normalizedSearch);
+
+        const matchesSite = siteFilter === 'all'
+            || (siteFilter === 'uncategorized' && !device.category_id)
+            || String(device.category_id) === siteFilter;
+
+        const matchesStatus = statusFilter === 'all'
+            || (statusFilter === 'online' && device.online)
+            || (statusFilter === 'offline' && !device.online);
+
+        const matchesPower = powerFilter === 'all'
+            || (powerFilter === 'on' && device.powerOn === true)
+            || (powerFilter === 'off' && device.powerOn === false)
+            || (powerFilter === 'unknown' && device.powerOn === null);
+
+        return matchesSearch && matchesSite && matchesStatus && matchesPower;
+    });
 
     const metricDefinitions = [
         {
@@ -248,67 +270,59 @@ export default function EquipementsPage() {
         const canControl = device.online && !isControlling;
         const primaryMetrics = getPrimaryMetrics(device);
         const rawProperties = Array.isArray(device.properties) ? device.properties : [];
+        const categoryName = device.category_id && categoriesById[device.category_id]
+            ? categoriesById[device.category_id].name
+            : 'Sans catégorie';
+        const modeProperty = rawProperties.find((property) => String(property?.code || '').toLowerCase().includes('mode'));
+        const modeValue = modeProperty?.value ? String(modeProperty.value) : '-';
+        const accentMetric = primaryMetrics.find((metric) => metric.key === 'temperature') || primaryMetrics[0];
+        const powerLabel = device.powerOn ? 'ON' : 'OFF';
 
         return (
-            <article key={device.id} className="equipment-card">
-                <div className="equipment-head">
-                    <h3>{device.name}</h3>
-                    <span className={`tuya-status ${device.online ? 'connected' : 'disconnected'}`}>
-                        {device.online ? 'En ligne' : 'Hors ligne'}
+            <article key={device.id} className="equip-card-modern">
+                <div className="equip-card-head">
+                    <div className="equip-title-line">
+                        <span className="equip-icon">{accentMetric?.icon || '⚙️'}</span>
+                        <div>
+                            <h3>{device.name}</h3>
+                            <p>{categoryName}</p>
+                        </div>
+                    </div>
+                    <span className={`equip-status-badge ${device.online ? 'online' : 'offline'}`}>
+                        {device.online ? 'online' : 'offline'}
                     </span>
                 </div>
 
-                <dl className="equipment-meta">
+                <dl className="equip-metrics-block">
+                    {primaryMetrics.length > 0 ? (
+                        primaryMetrics.slice(0, 2).map((metric) => (
+                            <div key={metric.key}>
+                                <dt>{metric.label}</dt>
+                                <dd>{metric.value}</dd>
+                            </div>
+                        ))
+                    ) : (
+                        <div>
+                            <dt>Mesures</dt>
+                            <dd>-</dd>
+                        </div>
+                    )}
                     <div>
-                        <dt>IP</dt>
-                        <dd>{device.ip || '-'}</dd>
-                    </div>
-                    <div>
-                        <dt>Modele</dt>
-                        <dd>{device.model || '-'}</dd>
-                    </div>
-                    <div>
-                        <dt>Etat</dt>
-                        <dd>
-                            {device.powerOn === null ? (
-                                <span className="device-state unknown">
-                                    <span className="status-icon">⚠️</span>
-                                    Information non disponible
-                                </span>
-                            ) : device.powerOn ? (
-                                <span className="device-state on">
-                                    <span className="status-icon">🟢</span>
-                                    Allumé
-                                </span>
-                            ) : (
-                                <span className="device-state off">
-                                    <span className="status-icon">⚫</span>
-                                    Éteint
-                                </span>
-                            )}
-                        </dd>
-                    </div>
-                    <div className="equipment-properties-block">
-                        <dt>Fonctionnalites principales</dt>
-                        <dd>
-                            {primaryMetrics.length > 0 ? (
-                                <div className="equipment-primary-metrics">
-                                    {primaryMetrics.map((metric) => (
-                                        <div key={metric.key} className="primary-metric-card">
-                                            <span className="metric-icon" aria-hidden="true">{metric.icon}</span>
-                                            <span className="metric-label">{metric.label}</span>
-                                            <strong className="metric-value">{metric.value}</strong>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <span>Aucune mesure principale disponible</span>
-                            )}
-                        </dd>
+                        <dt>Mode</dt>
+                        <dd>{modeValue}</dd>
                     </div>
                 </dl>
 
-                <div className="equipment-footer">
+                <div className="equip-actions-row">
+                    <button
+                        type="button"
+                        className={`equip-power-btn ${device.powerOn ? 'on' : 'off'}`}
+                        onClick={() => handleTogglePower(device)}
+                        disabled={!canControl}
+                        title={device.online ? 'Controler la mise sous tension' : 'Appareil hors ligne'}
+                    >
+                        {isControlling ? 'Envoi...' : `⏻ ${powerLabel}`}
+                    </button>
                     <button
                         type="button"
                         className="btn-info-device"
@@ -320,48 +334,31 @@ export default function EquipementsPage() {
                     </button>
                     <button
                         type="button"
-                        className={`btn-power-toggle ${device.powerOn ? 'off' : 'on'}`}
-                        onClick={() => handleTogglePower(device)}
-                        disabled={!canControl}
-                        title={device.online ? 'Controler la mise sous tension' : 'Appareil hors ligne'}
-                    >
-                        {isControlling ? 'Envoi...' : (device.powerOn ? 'Eteindre' : 'Allumer')}
-                    </button>
-                    <button
-                        type="button"
                         className="btn-edit"
                         onClick={() => setEditingDevice(device)}
                     >
-                        Modifier
-                    </button>
-                    <button
-                        type="button"
-                        className="btn-delete-device"
-                        onClick={() => handleDeleteDevice(device.id)}
-                    >
-                        Supprimer
+                        ⚙
                     </button>
                 </div>
 
-                {rawProperties.length > 0 && (
-                    <p className="equipment-hint-info">Clique sur i pour voir toutes les donnees capteur.</p>
-                )}
+                <div className="equip-footer-line">
+                    <span>{device.model || 'Modele inconnu'}</span>
+                    <strong>{device.ip || '-'}</strong>
+                </div>
             </article>
         );
     };
 
     return (
         <section className="page-shell">
-            <header className="page-header">
-                <h1>Equipements</h1>
-                <p>Vue d'ensemble de tous vos équipements organisés par catégories.</p>
-            </header>
-
-            <div className="equipments-full-width">
-                {/* Header avec bouton refresh */}
-                <div className="equipments-top-bar">
+            <header className="page-header equip-page-head">
+                <div>
+                    <h1>Équipements</h1>
+                    <p>Gestion et pilotage en temps reel</p>
+                </div>
+                <div className="equip-page-actions">
                     <button type="button" className="refresh-button" onClick={loadDevices} disabled={loading}>
-                        {loading ? 'Chargement...' : 'Rafraichir'}
+                        {loading ? 'Synchronisation...' : '⟳ Synchroniser Smart Life'}
                     </button>
                     <button
                         type="button"
@@ -370,6 +367,62 @@ export default function EquipementsPage() {
                     >
                         {showCategoryForm ? '✕ Annuler' : '+ Nouvelle catégorie'}
                     </button>
+                </div>
+            </header>
+
+            <div className="equipments-full-width">
+                <div className="equip-filter-bar">
+                    <div className="equip-filter-item">
+                        <label htmlFor="equip-search">Recherche</label>
+                        <input
+                            id="equip-search"
+                            type="text"
+                            placeholder="Nom équipement..."
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                    </div>
+                    <div className="equip-filter-item">
+                        <label htmlFor="equip-site-filter">Site</label>
+                        <select
+                            id="equip-site-filter"
+                            value={siteFilter}
+                            onChange={(e) => setSiteFilter(e.target.value)}
+                        >
+                            <option value="all">Tous les sites</option>
+                            {categoriesList.map((category) => (
+                                <option key={category.id} value={String(category.id)}>
+                                    {category.name}
+                                </option>
+                            ))}
+                            <option value="uncategorized">Sans catégorie</option>
+                        </select>
+                    </div>
+                    <div className="equip-filter-item">
+                        <label htmlFor="equip-status-filter">Statut</label>
+                        <select
+                            id="equip-status-filter"
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                        >
+                            <option value="all">Tous</option>
+                            <option value="online">Online</option>
+                            <option value="offline">Offline</option>
+                        </select>
+                    </div>
+                    <div className="equip-filter-item">
+                        <label htmlFor="equip-power-filter">Alimentation</label>
+                        <select
+                            id="equip-power-filter"
+                            value={powerFilter}
+                            onChange={(e) => setPowerFilter(e.target.value)}
+                        >
+                            <option value="all">Tous</option>
+                            <option value="on">ON</option>
+                            <option value="off">OFF</option>
+                            <option value="unknown">Inconnu</option>
+                        </select>
+                    </div>
                 </div>
 
                 {error && (
@@ -420,66 +473,33 @@ export default function EquipementsPage() {
                     </div>
                 )}
 
-                {!loading && !error && devices.length === 0 && (
+                {!loading && !error && filteredDevices.length === 0 && (
                     <p className="tuya-hint">
-                        Aucun equipement trouve. Verifiez votre projet Tuya ou reconnectez votre API dans
+                        Aucun equipement trouve avec ces filtres. Verifiez votre connexion dans
                         {' '}
                         <Link to="/parametres">Parametres</Link>.
                     </p>
                 )}
 
-                {devices.length > 0 && (
-                    <div className="equipments-by-category">
-                        {/* Catégories avec équipements */}
-                        {categoriesList.map((category) => {
-                            const categoryDevices = getDevicesByCategory(category.id);
-                            if (categoryDevices.length === 0) return null;
+                {filteredDevices.length > 0 && (
+                    <div className="equipments-grid equipments-grid-modern">
+                        {filteredDevices.map((device) => renderDeviceCard(device))}
+                    </div>
+                )}
 
-                            return (
-                                <div key={category.id} className="category-section">
-                                    <div className="category-header">
-                                        <div className="category-title">
-                                            <span style={{ fontSize: '1.4em' }}>{category.icon}</span>
-                                            <h2>{category.name}</h2>
-                                            {category.description && (
-                                                <p className="category-description">{category.description}</p>
-                                            )}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            className="btn-delete-category"
-                                            onClick={() => handleDeleteCategory(category.id)}
-                                            title="Supprimer la catégorie"
-                                        >
-                                            🗑️
-                                        </button>
-                                    </div>
-                                    <div className="equipments-grid">
-                                        {categoryDevices.map((device) => renderDeviceCard(device))}
-                                    </div>
-                                </div>
-                            );
-                        })}
-
-                        {/* Équipements sans catégorie */}
-                        {(() => {
-                            const unCategorizedDevices = getDevicesByCategory(null);
-                            if (unCategorizedDevices.length === 0) return null;
-
-                            return (
-                                <div className="category-section">
-                                    <div className="category-header">
-                                        <div className="category-title">
-                                            <span style={{ fontSize: '1.4em' }}>❓</span>
-                                            <h2>Sans catégorie</h2>
-                                        </div>
-                                    </div>
-                                    <div className="equipments-grid">
-                                        {unCategorizedDevices.map((device) => renderDeviceCard(device))}
-                                    </div>
-                                </div>
-                            );
-                        })()}
+                {categoriesList.length > 0 && (
+                    <div className="category-actions-row">
+                        {categoriesList.map((category) => (
+                            <button
+                                key={category.id}
+                                type="button"
+                                className="btn-delete-category"
+                                onClick={() => handleDeleteCategory(category.id)}
+                                title={`Supprimer ${category.name}`}
+                            >
+                                🗑 {category.name}
+                            </button>
+                        ))}
                     </div>
                 )}
             </div>
@@ -491,6 +511,7 @@ export default function EquipementsPage() {
                     loading={loading}
                     onClose={() => setEditingDevice(null)}
                     onSave={handleSaveDeviceCategory}
+                    onDelete={handleDeleteDevice}
                 />
             )}
 
