@@ -1,6 +1,10 @@
 import api from './api';
 
 const sitesZonesService = {
+    getSites: () => api.get('/sites-zones/sites'),
+
+    createSite: (payload) => api.post('/sites-zones/sites', payload),
+
     getRooms: () => api.get('/sites-zones/rooms'),
 
     syncTuyaRooms: () => api.post('/sites-zones/sync-tuya'),

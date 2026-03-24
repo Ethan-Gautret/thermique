@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Room;
+use App\Models\Site;
 use App\Models\TuyaConnection;
 use Illuminate\Http\Client\Response;
 use Illuminate\Http\Request;
@@ -19,9 +20,40 @@ class SiteZoneController extends Controller
         'in' => 'https://openapi.tuyain.com',
     ];
 
+    public function sitesIndex()
+    {
+        $sites = Site::where('user_id', Auth::id())
+            ->orderBy('name')
+            ->get();
+
+        return response()->json([
+            'data' => $sites->map(fn (Site $site) => $this->transformSite($site))->values(),
+        ]);
+    }
+
+    public function sitesStore(Request $request)
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:120',
+            'address' => 'nullable|string|max:500',
+        ]);
+
+        $site = Site::create([
+            'user_id' => Auth::id(),
+            'name' => $validated['name'],
+            'address' => $validated['address'] ?? null,
+        ]);
+
+        return response()->json([
+            'message' => 'Site cree avec succes.',
+            'data' => $this->transformSite($site),
+        ], 201);
+    }
+
     public function index()
     {
         $rooms = Room::where('user_id', Auth::id())
+            ->with('site')
             ->orderBy('name')
             ->get();
 
@@ -83,6 +115,18 @@ class SiteZoneController extends Controller
                         'synced_at' => now(),
                     ]
                 );
+                
+                // Synchroniser les équipements affectés à cette pièce
+                try {
+                    $this->syncRoomDevicesFromTuya($connection, $room);
+                } catch (\Exception $e) {
+                    Log::warning('Failed to sync devices for room', [
+                        'room_id' => $room->id,
+                        'tuya_room_id' => $room->tuya_room_id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+                
                 $synced[] = $this->transformRoom($room);
             }
 
@@ -151,12 +195,18 @@ class SiteZoneController extends Controller
         $validated = $request->validate([
             'name' => 'required|string|max:120',
             'description' => 'nullable|string|max:500',
+            'siteId' => 'nullable|integer',
             'deviceIds' => 'nullable|array',
             'deviceIds.*' => 'string|max:120',
         ]);
 
+        if (isset($validated['siteId']) && !$this->siteBelongsToUser((int) $validated['siteId'])) {
+            return response()->json(['message' => 'Site invalide.'], 422);
+        }
+
         $room = Room::create([
             'user_id' => Auth::id(),
+            'site_id' => $validated['siteId'] ?? null,
             'name' => $validated['name'],
             'description' => $validated['description'] ?? null,
             'device_ids' => $validated['deviceIds'] ?? [],
@@ -179,9 +229,16 @@ class SiteZoneController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:120',
             'description' => 'sometimes|nullable|string|max:500',
+            'siteId' => 'sometimes|nullable|integer',
             'deviceIds' => 'sometimes|array',
             'deviceIds.*' => 'string|max:120',
         ]);
+
+        if (array_key_exists('siteId', $validated)
+            && !is_null($validated['siteId'])
+            && !$this->siteBelongsToUser((int) $validated['siteId'])) {
+            return response()->json(['message' => 'Site invalide.'], 422);
+        }
 
         if (empty($validated)) {
             return response()->json(['message' => 'Aucune modification a appliquer.'], 422);
@@ -193,6 +250,10 @@ class SiteZoneController extends Controller
 
         if (array_key_exists('description', $validated)) {
             $room->description = $validated['description'];
+        }
+
+        if (array_key_exists('siteId', $validated)) {
+            $room->site_id = $validated['siteId'];
         }
 
         if (array_key_exists('deviceIds', $validated)) {
@@ -424,6 +485,64 @@ class SiteZoneController extends Controller
         throw new \RuntimeException('Impossible d\'affecter les equipements a la piece dans Tuya. ' . implode(' | ', $errors));
     }
 
+    /**
+     * Récupère les équipements affectés à une pièce depuis Tuya et les sauvegarde localement
+     */
+    private function syncRoomDevicesFromTuya(TuyaConnection $connection, Room $room): void
+    {
+        // Si la pièce n'a pas de tuya_room_id, on ne peut pas récupérer ses équipements
+        if (empty($room->tuya_room_id)) {
+            return;
+        }
+
+        $paths = [
+            "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
+            "/v1.0/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
+            "/v1.0/iot-03/families/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
+            "/v1.0/families/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
+        ];
+
+        foreach ($paths as $path) {
+            $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'GET', $path);
+            $payload = $response->json() ?: [];
+
+            if ($this->isTuyaSuccess($response, $payload)) {
+                $result = $payload['result'] ?? [];
+                
+                // Extraire les IDs des équipements
+                $deviceIds = [];
+                
+                if (is_array($result)) {
+                    if (array_is_list($result)) {
+                        // Si c'est un tableau de devices
+                        foreach ($result as $device) {
+                            if (is_array($device) && isset($device['id'])) {
+                                $deviceIds[] = (string) $device['id'];
+                            }
+                        }
+                    } elseif (isset($result['list']) && is_array($result['list'])) {
+                        // Si c'est un objet avec une clé 'list'
+                        foreach ($result['list'] as $device) {
+                            if (is_array($device) && isset($device['id'])) {
+                                $deviceIds[] = (string) $device['id'];
+                            }
+                        }
+                    }
+                }
+                
+                // Sauvegarder les IDs des équipements
+                $room->update(['device_ids' => $deviceIds]);
+                return;
+            }
+        }
+
+        Log::warning('Could not fetch devices from Tuya for room', [
+            'room_id' => $room->id,
+            'tuya_room_id' => $room->tuya_room_id,
+            'home_id' => $connection->home_id,
+        ]);
+    }
+
     private function formatTuyaError(string $path, Response $response, array $payload): string
     {
         $code = $payload['code'] ?? $response->status();
@@ -567,8 +686,12 @@ class SiteZoneController extends Controller
 
     private function transformRoom(Room $room): array
     {
+        $room->loadMissing('site');
+
         return [
             'id' => $room->id,
+            'siteId' => $room->site_id,
+            'siteName' => $room->site?->name,
             'name' => $room->name,
             'description' => $room->description,
             'deviceIds' => $room->device_ids ?? [],
@@ -579,5 +702,22 @@ class SiteZoneController extends Controller
             'syncedAt' => $room->synced_at,
             'createdAt' => $room->created_at,
         ];
+    }
+
+    private function transformSite(Site $site): array
+    {
+        return [
+            'id' => $site->id,
+            'name' => $site->name,
+            'address' => $site->address,
+            'createdAt' => $site->created_at,
+        ];
+    }
+
+    private function siteBelongsToUser(int $siteId): bool
+    {
+        return Site::where('id', $siteId)
+            ->where('user_id', Auth::id())
+            ->exists();
     }
 }

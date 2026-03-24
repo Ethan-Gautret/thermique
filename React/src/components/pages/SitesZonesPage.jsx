@@ -3,15 +3,29 @@ import tuyaService from '../../services/tuya';
 import sitesZonesService from '../../services/sitesZones';
 
 export default function SitesZonesPage() {
+    const [sites, setSites] = useState([]);
     const [rooms, setRooms] = useState([]);
     const [devices, setDevices] = useState([]);
+    const [loadingSites, setLoadingSites] = useState(true);
     const [loadingRooms, setLoadingRooms] = useState(true);
     const [loadingDevices, setLoadingDevices] = useState(true);
     const [savingRoomId, setSavingRoomId] = useState(null);
     const [createLoading, setCreateLoading] = useState(false);
+    const [createSiteLoading, setCreateSiteLoading] = useState(false);
+    const [attachZoneLoading, setAttachZoneLoading] = useState(false);
     const [error, setError] = useState('');
     const [feedback, setFeedback] = useState('');
-    const [form, setForm] = useState({ name: '', description: '' });
+    const [form, setForm] = useState({ name: '', description: '', siteId: '' });
+    const [siteForm, setSiteForm] = useState({ name: '', address: '' });
+    const [createZoneMode, setCreateZoneMode] = useState('create');
+    const [selectedExistingRoomId, setSelectedExistingRoomId] = useState('');
+    const [showCreateRoomModal, setShowCreateRoomModal] = useState(false);
+    const [showCreateSiteModal, setShowCreateSiteModal] = useState(false);
+    const [showRoomSettingsModal, setShowRoomSettingsModal] = useState(false);
+    const [selectedRoomForSettings, setSelectedRoomForSettings] = useState(null);
+    const [showAddEquipmentModal, setShowAddEquipmentModal] = useState(false);
+    const [selectedRoomForEquipment, setSelectedRoomForEquipment] = useState(null);
+    const [selectedDeviceToAdd, setSelectedDeviceToAdd] = useState('');
 
     const loadRoomsFromTuya = async ({ silent = false } = {}) => {
         try {
@@ -41,6 +55,80 @@ export default function SitesZonesPage() {
     const tuyaRooms = useMemo(() => {
         return rooms.filter((room) => Boolean(room.tuyaRoomId));
     }, [rooms]);
+
+    const associatedDeviceIds = useMemo(() => {
+        const allIds = rooms.flatMap((room) => (Array.isArray(room.deviceIds) ? room.deviceIds : []));
+        return Array.from(new Set(allIds));
+    }, [rooms]);
+
+    const onlineAssociatedCount = useMemo(() => {
+        return associatedDeviceIds.reduce((count, deviceId) => {
+            const device = devicesById.get(deviceId);
+            return count + (device?.online ? 1 : 0);
+        }, 0);
+    }, [associatedDeviceIds, devicesById]);
+
+    const roomsBySite = useMemo(() => {
+        const grouped = new Map();
+
+        sites.forEach((site) => {
+            grouped.set(site.id, []);
+        });
+
+        rooms.forEach((room) => {
+            if (room.siteId && grouped.has(room.siteId)) {
+                grouped.get(room.siteId).push(room);
+            }
+        });
+
+        return grouped;
+    }, [sites, rooms]);
+
+    const roomsWithoutSite = useMemo(() => {
+        return rooms.filter((room) => !room.siteId);
+    }, [rooms]);
+
+    const existingZonesForAttach = useMemo(() => {
+        return rooms
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }, [rooms]);
+
+    const currentSiteRoomsForModal = useMemo(() => {
+        if (form.siteId === '') {
+            return [];
+        }
+
+        return rooms
+            .filter((room) => room.siteId === Number(form.siteId))
+            .sort((a, b) => a.name.localeCompare(b.name));
+    }, [rooms, form.siteId]);
+
+    const availableDevicesForModal = useMemo(() => {
+        if (!selectedRoomForEquipment) {
+            return [];
+        }
+
+        const selectedIds = Array.isArray(selectedRoomForEquipment.deviceIds)
+            ? selectedRoomForEquipment.deviceIds
+            : [];
+
+        return devices.filter((device) => !selectedIds.includes(device.id));
+    }, [devices, selectedRoomForEquipment]);
+
+    const loadSites = async () => {
+        setLoadingSites(true);
+
+        try {
+            const response = await sitesZonesService.getSites();
+            setSites(response.data?.data || []);
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de charger les sites.';
+            setError(message);
+            setSites([]);
+        } finally {
+            setLoadingSites(false);
+        }
+    };
 
     const loadRooms = async () => {
         setLoadingRooms(true);
@@ -74,7 +162,7 @@ export default function SitesZonesPage() {
         const bootstrap = async () => {
             setError('');
             await loadRoomsFromTuya({ silent: true });
-            await Promise.all([loadRooms(), loadDevices()]);
+            await Promise.all([loadSites(), loadRooms(), loadDevices()]);
         };
 
         bootstrap();
@@ -96,6 +184,7 @@ export default function SitesZonesPage() {
             const response = await sitesZonesService.createRoom({
                 name: form.name.trim(),
                 description: form.description.trim() || null,
+                siteId: form.siteId === '' ? null : Number(form.siteId),
             });
 
             const createdRoom = response.data?.data;
@@ -103,8 +192,9 @@ export default function SitesZonesPage() {
                 setRooms((prev) => [...prev, createdRoom].sort((a, b) => a.name.localeCompare(b.name)));
             }
 
-            setForm({ name: '', description: '' });
+            setForm({ name: '', description: '', siteId: '' });
             setFeedback('Piece creee. Vous pouvez maintenant y affecter des equipements.');
+            setTimeout(() => setShowCreateRoomModal(false), 1500);
         } catch (err) {
             const message = err.response?.data?.message || 'Creation impossible pour le moment.';
             setError(message);
@@ -153,6 +243,32 @@ export default function SitesZonesPage() {
         persistRoomDevices(room, nextDeviceIds);
     };
 
+    const openAddEquipmentModal = (room) => {
+        setSelectedRoomForEquipment(room);
+        setSelectedDeviceToAdd('');
+        setShowAddEquipmentModal(true);
+    };
+
+    const handleAddEquipmentToRoom = async (event) => {
+        event.preventDefault();
+
+        if (!selectedRoomForEquipment || !selectedDeviceToAdd) {
+            setError('Selectionnez un equipement a ajouter.');
+            return;
+        }
+
+        const current = Array.isArray(selectedRoomForEquipment.deviceIds)
+            ? selectedRoomForEquipment.deviceIds
+            : [];
+        const nextDeviceIds = Array.from(new Set([...current, selectedDeviceToAdd]));
+
+        await persistRoomDevices(selectedRoomForEquipment, nextDeviceIds);
+
+        setShowAddEquipmentModal(false);
+        setSelectedRoomForEquipment(null);
+        setSelectedDeviceToAdd('');
+    };
+
     const handleDeleteRoom = async (room) => {
         const shouldDelete = window.confirm(`Supprimer la piece \"${room.name}\" ?`);
         if (!shouldDelete) {
@@ -175,181 +291,720 @@ export default function SitesZonesPage() {
         }
     };
 
+    const handleDetachRoomFromSite = async (room) => {
+        setSavingRoomId(room.id);
+        setError('');
+        setFeedback('');
+
+        try {
+            const response = await sitesZonesService.updateRoom(room.id, { siteId: null });
+            const updatedRoom = response.data?.data;
+
+            if (updatedRoom) {
+                setRooms((prev) => prev.map((item) => (item.id === updatedRoom.id ? updatedRoom : item)));
+            }
+
+            setFeedback(`Zone ${room.name} retiree du site.`);
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de retirer cette zone du site.';
+            setError(message);
+        } finally {
+            setSavingRoomId(null);
+        }
+    };
+
+    const handleCreateSite = async (event) => {
+        event.preventDefault();
+        setError('');
+        setFeedback('');
+
+        if (!siteForm.name.trim()) {
+            setError('Le nom du site est obligatoire.');
+            return;
+        }
+
+        setCreateSiteLoading(true);
+
+        try {
+            const response = await sitesZonesService.createSite({
+                name: siteForm.name.trim(),
+                address: siteForm.address.trim() || null,
+            });
+
+            const createdSite = response.data?.data;
+            if (createdSite) {
+                setSites((prev) => [...prev, createdSite].sort((a, b) => a.name.localeCompare(b.name)));
+            }
+
+            setFeedback('Site cree avec succes.');
+            setSiteForm({ name: '', address: '' });
+            setShowCreateSiteModal(false);
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de creer le site.';
+            setError(message);
+        } finally {
+            setCreateSiteLoading(false);
+        }
+    };
+
+    const openCreateRoomModal = (siteId = '') => {
+        setError('');
+        setFeedback('');
+        setCreateZoneMode('create');
+        setSelectedExistingRoomId('');
+        setForm({ name: '', description: '', siteId });
+        setShowCreateRoomModal(true);
+    };
+
+    const handleAttachExistingZone = async (event) => {
+        event.preventDefault();
+        setError('');
+        setFeedback('');
+
+        if (!selectedExistingRoomId) {
+            setError('Selectionnez une zone existante a affecter.');
+            return;
+        }
+
+        if (form.siteId === '') {
+            setError('Le site cible est obligatoire.');
+            return;
+        }
+
+        const roomToAttach = rooms.find((room) => room.id === Number(selectedExistingRoomId));
+        if (!roomToAttach) {
+            setError('Zone introuvable.');
+            return;
+        }
+
+        setAttachZoneLoading(true);
+
+        try {
+            const response = await sitesZonesService.updateRoom(roomToAttach.id, {
+                siteId: Number(form.siteId),
+            });
+
+            const updatedRoom = response.data?.data;
+            if (updatedRoom) {
+                setRooms((prev) => prev.map((item) => (item.id === updatedRoom.id ? updatedRoom : item)));
+            }
+
+            setFeedback(`Zone ${roomToAttach.name} affectee au site.`);
+            setShowCreateRoomModal(false);
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible d affecter cette zone.';
+            setError(message);
+        } finally {
+            setAttachZoneLoading(false);
+        }
+    };
+
     return (
         <section className="page-shell">
             <header className="page-header">
-                <h1>Sites & Zones</h1>
-                <p>Creez des pieces et affectez vos equipements Tuya comme dans l'organisation Tuya.</p>
+                <div className="page-header-row">
+                    <h1>Sites & Zones</h1>
+                    <div className="tuya-top-counter">Pieces Tuya: {tuyaRooms.length}</div>
+                </div>
+                <p>Gestion de l organisation multi-sites</p>
             </header>
 
+            <div className="sites-zones-topbar">
+                <div className="sites-zones-stat-grid">
+                    <article className="sz-stat-card">
+                        <p className="sz-stat-label">Sites</p>
+                        <p className="sz-stat-value">{sites.length}</p>
+                    </article>
+                    <article className="sz-stat-card">
+                        <p className="sz-stat-label">Zones</p>
+                        <p className="sz-stat-value">{rooms.length}</p>
+                    </article>
+                    <article className="sz-stat-card">
+                        <p className="sz-stat-label">Equipements</p>
+                        <p className="sz-stat-value">{associatedDeviceIds.length}</p>
+                    </article>
+                    <article className="sz-stat-card">
+                        <p className="sz-stat-label">En fonctionnement</p>
+                        <p className="sz-stat-value">{onlineAssociatedCount}</p>
+                    </article>
+                </div>
+
+                <div className="sites-zones-top-actions">
+                    <button
+                        type="button"
+                        className="refresh-button"
+                        onClick={() => setShowCreateSiteModal(true)}
+                    >
+                        + Ajouter un site
+                    </button>
+                    <button
+                        type="button"
+                        className="refresh-button"
+                        onClick={async () => {
+                            setError('');
+                            setFeedback('');
+                            await loadRoomsFromTuya();
+                            await Promise.all([loadSites(), loadRooms(), loadDevices()]);
+                        }}
+                        disabled={loadingSites || loadingRooms || loadingDevices}
+                    >
+                        {(loadingSites || loadingRooms || loadingDevices) ? 'Chargement...' : 'Rafraichir'}
+                    </button>
+                </div>
+            </div>
+
             <div className="sites-zones-layout">
-                <article className="panel sites-zones-create-panel">
-                    <div className="panel-head">
-                        <h2>Nouvelle piece</h2>
-                    </div>
-
-                    <form className="sites-zones-form" onSubmit={handleCreateRoom}>
-                        <label>
-                            Nom de la piece
-                            <input
-                                type="text"
-                                value={form.name}
-                                onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                                placeholder="Ex: Bureau R+1"
-                                maxLength={120}
-                            />
-                        </label>
-
-                        <label>
-                            Description (optionnel)
-                            <textarea
-                                value={form.description}
-                                onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                                placeholder="Contexte thermique ou type de zone"
-                                maxLength={500}
-                                rows={4}
-                            />
-                        </label>
-
-                        <button type="submit" disabled={createLoading}>
-                            {createLoading ? 'Creation...' : 'Creer la piece'}
-                        </button>
-                    </form>
-
-                    {error && <div className="tuya-feedback error"><p>{error}</p></div>}
-                    {feedback && <div className="tuya-feedback success"><p>{feedback}</p></div>}
-                </article>
-
                 <article className="panel sites-zones-rooms-panel">
-                    <div className="panel-head">
-                        <div>
-                            <h2>Pieces configurees</h2>
-                            <p>Affectez un equipement a une ou plusieurs pieces.</p>
-                        </div>
-                        <button
-                            type="button"
-                            className="refresh-button"
-                            onClick={async () => {
-                                setError('');
-                                setFeedback('');
-                                await loadRoomsFromTuya();
-                                await Promise.all([loadRooms(), loadDevices()]);
-                            }}
-                            disabled={loadingRooms || loadingDevices}
-                        >
-                            {(loadingRooms || loadingDevices) ? 'Chargement...' : 'Rafraichir'}
-                        </button>
-                    </div>
-
-                    <div className="tuya-rooms-panel">
-                        <div className="tuya-rooms-panel-head">
-                            <h3>Pieces Tuya detectees</h3>
-                            <span>{tuyaRooms.length}</span>
-                        </div>
-
-                        {loadingRooms && <p className="tuya-hint">Lecture des pieces Tuya...</p>}
-
-                        {!loadingRooms && tuyaRooms.length === 0 && (
-                            <p className="tuya-hint">
-                                Aucune piece Tuya detectee. Verifiez Home ID puis cliquez sur Rafraichir.
-                            </p>
-                        )}
-
-                        {!loadingRooms && tuyaRooms.length > 0 && (
-                            <div className="tuya-rooms-list">
-                                {tuyaRooms.map((room) => (
-                                    <article key={`tuya-${room.id}`} className="tuya-room-item">
-                                        <p className="tuya-room-name">{room.name}</p>
-                                        <p className="tuya-room-meta">
-                                            ID Tuya: {room.tuyaRoomId}
-                                            {room.syncedAt ? ` • Sync: ${new Date(room.syncedAt).toLocaleString()}` : ''}
-                                        </p>
-                                    </article>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-
+                    {loadingSites && <p className="tuya-hint">Chargement des sites...</p>}
                     {loadingRooms && <p className="tuya-hint">Chargement des pieces...</p>}
 
-                    {!loadingRooms && rooms.length === 0 && (
-                        <p className="tuya-hint">Aucune piece pour l'instant. Creez-en une pour commencer.</p>
+                    {!loadingSites && sites.length === 0 && (
+                        <p className="tuya-hint">Aucun site pour l instant. Creez un site puis affectez vos zones.</p>
                     )}
 
-                    {!loadingRooms && rooms.length > 0 && (
-                        <div className="rooms-grid">
-                            {rooms.map((room) => {
-                                const selectedDeviceIds = Array.isArray(room.deviceIds) ? room.deviceIds : [];
-                                const busy = savingRoomId === room.id;
+                    {!loadingRooms && rooms.length === 0 && (
+                        <p className="tuya-hint">Aucune zone pour l instant. Creez-en une pour commencer.</p>
+                    )}
+
+                    {!loadingSites && sites.length > 0 && (
+                        <div className="sites-list-stack">
+                            {sites.map((site) => {
+                                const siteRooms = roomsBySite.get(site.id) || [];
+                                const siteDeviceIds = Array.from(
+                                    new Set(siteRooms.flatMap((room) => (Array.isArray(room.deviceIds) ? room.deviceIds : [])))
+                                );
+                                const siteOnlineCount = siteDeviceIds.reduce((count, deviceId) => {
+                                    const device = devicesById.get(deviceId);
+                                    return count + (device?.online ? 1 : 0);
+                                }, 0);
 
                                 return (
-                                    <article key={room.id} className="room-card">
-                                        <div className="room-card-head">
+                                    <section key={site.id} className="site-group-card">
+                                        <div className="sites-main-card-head">
                                             <div>
-                                                <h3>{room.name}</h3>
-                                                <p>{room.description || 'Aucune description'}</p>
+                                                <h2>{site.name}</h2>
+                                                <p>{site.address || 'Adresse non renseignee'}</p>
                                             </div>
                                             <button
                                                 type="button"
-                                                className="room-delete-btn"
-                                                onClick={() => handleDeleteRoom(room)}
-                                                disabled={busy}
+                                                className="site-edit-btn"
+                                                onClick={() => openCreateRoomModal(site.id)}
                                             >
-                                                Supprimer
+                                                Parametres
                                             </button>
                                         </div>
 
-                                        <p className="room-count">{selectedDeviceIds.length} equipement(s) affecte(s)</p>
+                                        <div className="site-kpi-row">
+                                            <article className="site-kpi-box">
+                                                <p>Zones</p>
+                                                <strong>{siteRooms.length}</strong>
+                                            </article>
+                                            <article className="site-kpi-box">
+                                                <p>Equipements</p>
+                                                <strong>{siteDeviceIds.length}</strong>
+                                            </article>
+                                            <article className="site-kpi-box">
+                                                <p>En ligne</p>
+                                                <strong>{siteOnlineCount}</strong>
+                                            </article>
+                                        </div>
 
-                                        <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>
-                                            {room.syncStatus === 'synced' && 'Synchronise Tuya / Smart Life'}
-                                            {room.syncStatus === 'warning' && 'Synchronisation partielle'}
-                                            {(!room.syncStatus || room.syncStatus === 'local') && 'Local uniquement'}
-                                        </p>
+                                        <div className="zones-section-head">
+                                            <h3>Zones ({siteRooms.length})</h3>
+                                        </div>
 
-                                        {room.syncMessage && (
-                                            <p className="room-sync-message">{room.syncMessage}</p>
+                                        {siteRooms.length === 0 && (
+                                            <p className="tuya-hint">Aucune zone affectee a ce site.</p>
                                         )}
 
-                                        {loadingDevices && <p className="tuya-hint">Chargement des equipements...</p>}
-
-                                        {!loadingDevices && devices.length === 0 && (
-                                            <p className="tuya-hint">
-                                                Aucun equipement Tuya disponible. Connectez d'abord l'API Tuya.
-                                            </p>
-                                        )}
-
-                                        {!loadingDevices && devices.length > 0 && (
-                                            <div className="room-device-list">
-                                                {devices.map((device) => {
-                                                    const checked = selectedDeviceIds.includes(device.id);
-                                                    const labelSuffix = device.category ? ` (${device.category})` : '';
+                                        {siteRooms.length > 0 && (
+                                            <div className="rooms-grid">
+                                                {siteRooms.map((room) => {
+                                                    const selectedDeviceIds = Array.isArray(room.deviceIds) ? room.deviceIds : [];
+                                                    const busy = savingRoomId === room.id;
 
                                                     return (
-                                                        <label key={device.id} className="room-device-item">
-                                                            <input
-                                                                type="checkbox"
-                                                                checked={checked}
-                                                                onChange={(event) => handleToggleDevice(room, device.id, event.target.checked)}
-                                                                disabled={busy}
-                                                            />
-                                                            <span>
-                                                                {device.name}
-                                                                {labelSuffix}
-                                                                {!devicesById.has(device.id) ? ' (indisponible)' : ''}
-                                                            </span>
-                                                        </label>
+                                                        <article key={room.id} className="room-card">
+                                                            <div className="room-card-head">
+                                                                <div>
+                                                                    <h3>{room.name}</h3>
+                                                                    <p>{room.description || 'Zone technique'}</p>
+                                                                </div>
+                                                                <div className="room-card-head-actions">
+                                                                    <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>Syncro</p>
+                                                                    <button
+                                                                        type="button"
+                                                                        className="room-settings-btn"
+                                                                        onClick={() => {
+                                                                            setSelectedRoomForSettings(room);
+                                                                            setShowRoomSettingsModal(true);
+                                                                        }}
+                                                                        disabled={busy}
+                                                                        aria-label="Parametres de la zone"
+                                                                    >
+                                                                        ⚙
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+
+                                                            <p className="room-count">{selectedDeviceIds.length} equipement(s) affecte(s)</p>
+
+                                                            {room.syncMessage && (
+                                                                <p className="room-sync-message">{room.syncMessage}</p>
+                                                            )}
+
+                                                            {loadingDevices && <p className="tuya-hint">Chargement des equipements...</p>}
+
+                                                            {!loadingDevices && selectedDeviceIds.length === 0 && (
+                                                                <p className="tuya-hint">Aucun equipement affecte.</p>
+                                                            )}
+
+                                                            {!loadingDevices && selectedDeviceIds.length > 0 && (
+                                                                <ul className="room-associated-list">
+                                                                    {selectedDeviceIds.map((deviceId) => {
+                                                                        const device = devicesById.get(deviceId);
+                                                                        if (!device) {
+                                                                            return (
+                                                                                <li key={deviceId} className="room-associated-item">Equipement indisponible</li>
+                                                                            );
+                                                                        }
+
+                                                                        return (
+                                                                            <li key={deviceId} className="room-associated-item">
+                                                                                <span>{device.name}</span>
+                                                                                <small>{device.category || 'inconnu'}</small>
+                                                                            </li>
+                                                                        );
+                                                                    })}
+                                                                </ul>
+                                                            )}
+
+                                                            <div className="room-card-footer-actions">
+                                                                <button
+                                                                    type="button"
+                                                                    className="room-add-device-btn"
+                                                                    onClick={() => openAddEquipmentModal(room)}
+                                                                    disabled={busy || loadingDevices || devices.length === 0}
+                                                                >
+                                                                    + Ajouter un equipement
+                                                                </button>
+                                                            </div>
+                                                        </article>
                                                     );
                                                 })}
                                             </div>
                                         )}
-                                    </article>
+                                    </section>
                                 );
                             })}
                         </div>
                     )}
+
+                    {!loadingRooms && roomsWithoutSite.length > 0 && (
+                        <section className="site-group-card site-group-card-unassigned">
+                            <div className="sites-main-card-head">
+                                <div>
+                                    <h2>Sans site</h2>
+                                    <p>Zones non affectees</p>
+                                </div>
+                            </div>
+                            <div className="rooms-grid">
+                                {roomsWithoutSite.map((room) => {
+                                    const selectedDeviceIds = Array.isArray(room.deviceIds) ? room.deviceIds : [];
+                                    const busy = savingRoomId === room.id;
+
+                                    return (
+                                        <article key={room.id} className="room-card">
+                                            <div className="room-card-head">
+                                                <div>
+                                                    <h3>{room.name}</h3>
+                                                    <p>{room.description || 'Zone technique'}</p>
+                                                </div>
+                                                <div className="room-card-head-actions">
+                                                    <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>Syncro</p>
+                                                    <button
+                                                        type="button"
+                                                        className="room-settings-btn"
+                                                        onClick={() => {
+                                                            setSelectedRoomForSettings(room);
+                                                            setShowRoomSettingsModal(true);
+                                                        }}
+                                                        disabled={busy}
+                                                        aria-label="Parametres de la zone"
+                                                    >
+                                                        ⚙
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <p className="room-count">{selectedDeviceIds.length} equipement(s) affecte(s)</p>
+
+                                            {loadingDevices && <p className="tuya-hint">Chargement des equipements...</p>}
+
+                                            {!loadingDevices && selectedDeviceIds.length === 0 && (
+                                                <p className="tuya-hint">Aucun equipement affecte.</p>
+                                            )}
+
+                                            {!loadingDevices && selectedDeviceIds.length > 0 && (
+                                                <ul className="room-associated-list">
+                                                    {selectedDeviceIds.map((deviceId) => {
+                                                        const device = devicesById.get(deviceId);
+                                                        if (!device) {
+                                                            return (
+                                                                <li key={deviceId} className="room-associated-item">Equipement indisponible</li>
+                                                            );
+                                                        }
+
+                                                        return (
+                                                            <li key={deviceId} className="room-associated-item">
+                                                                <span>{device.name}</span>
+                                                                <small>{device.category || 'inconnu'}</small>
+                                                            </li>
+                                                        );
+                                                    })}
+                                                </ul>
+                                            )}
+
+                                            <div className="room-card-footer-actions">
+                                                <button
+                                                    type="button"
+                                                    className="room-add-device-btn"
+                                                    onClick={() => openAddEquipmentModal(room)}
+                                                    disabled={busy || loadingDevices || devices.length === 0}
+                                                >
+                                                    + Ajouter un equipement
+                                                </button>
+                                            </div>
+                                        </article>
+                                    );
+                                })}
+                            </div>
+                        </section>
+                    )}
                 </article>
             </div>
+
+            {showCreateRoomModal && (
+                <div className="modal-overlay" onClick={() => setShowCreateRoomModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>📍 Gérer les zones du site</h2>
+                            <button
+                                type="button"
+                                className="close-button"
+                                onClick={() => setShowCreateRoomModal(false)}
+                                aria-label="Fermer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="modal-body sites-zones-form">
+                            <label>
+                                Site cible
+                                <select
+                                    value={form.siteId}
+                                    onChange={(event) => setForm((prev) => ({ ...prev, siteId: event.target.value === '' ? '' : Number(event.target.value) }))}
+                                    disabled
+                                >
+                                    <option value="">Selectionnez un site</option>
+                                    {sites.map((site) => (
+                                        <option key={site.id} value={site.id}>{site.name}</option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            <div className="zone-mode-switch">
+                                <button
+                                    type="button"
+                                    className={`zone-mode-btn ${createZoneMode === 'existing' ? 'active' : ''}`}
+                                    onClick={() => setCreateZoneMode('existing')}
+                                >
+                                    Selectionner une zone existante
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`zone-mode-btn ${createZoneMode === 'create' ? 'active' : ''}`}
+                                    onClick={() => setCreateZoneMode('create')}
+                                >
+                                    Creer une nouvelle zone
+                                </button>
+                            </div>
+
+                            {createZoneMode === 'existing' && (
+                                <form onSubmit={handleAttachExistingZone} className="sites-zones-form-inner">
+                                    <label>
+                                        Zone existante
+                                        <select
+                                            value={selectedExistingRoomId}
+                                            onChange={(event) => setSelectedExistingRoomId(event.target.value)}
+                                        >
+                                            <option value="">Selectionnez une zone</option>
+                                            {existingZonesForAttach.map((room) => (
+                                                <option key={room.id} value={room.id}>
+                                                    {room.name}{room.siteName ? ` (${room.siteName})` : ' (sans site)'}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    {error && <div className="tuya-feedback error"><p>{error}</p></div>}
+                                    {feedback && <div className="tuya-feedback success"><p>{feedback}</p></div>}
+
+                                    <div className="modal-footer">
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => setShowCreateRoomModal(false)}
+                                        >
+                                            Annuler
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            className="btn-primary"
+                                            disabled={attachZoneLoading}
+                                        >
+                                            {attachZoneLoading ? 'Affectation...' : 'Affecter la zone'}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+
+                            <div className="site-zone-management">
+                                <h3>Retirer des zones du site</h3>
+                                {currentSiteRoomsForModal.length === 0 && (
+                                    <p className="tuya-hint">Aucune zone affectee a ce site.</p>
+                                )}
+                                {currentSiteRoomsForModal.length > 0 && (
+                                    <div className="site-zone-management-list">
+                                        {currentSiteRoomsForModal.map((room) => (
+                                            <div key={`manage-${room.id}`} className="site-zone-management-item">
+                                                <span>{room.name}</span>
+                                                <button
+                                                    type="button"
+                                                    className="btn-danger"
+                                                    onClick={() => handleDetachRoomFromSite(room)}
+                                                    disabled={savingRoomId === room.id}
+                                                >
+                                                    {savingRoomId === room.id ? '...' : 'Retirer'}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {createZoneMode === 'create' && (
+                                <form className="sites-zones-form-inner" onSubmit={handleCreateRoom}>
+                                    <label>
+                                        Nom de la zone
+                                        <input
+                                            type="text"
+                                            value={form.name}
+                                            onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
+                                            placeholder="Ex: Bureau R+1"
+                                            maxLength={120}
+                                            autoFocus
+                                        />
+                                    </label>
+
+                                    <label>
+                                        Description (optionnel)
+                                        <textarea
+                                            value={form.description}
+                                            onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
+                                            placeholder="Contexte thermique ou type de zone"
+                                            maxLength={500}
+                                            rows={4}
+                                        />
+                                    </label>
+
+                                    {error && <div className="tuya-feedback error"><p>{error}</p></div>}
+                                    {feedback && <div className="tuya-feedback success"><p>{feedback}</p></div>}
+
+                                    <div className="modal-footer">
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => setShowCreateRoomModal(false)}
+                                        >
+                                            Annuler
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            className="btn-primary"
+                                            disabled={createLoading}
+                                        >
+                                            {createLoading ? 'Création...' : 'Créer la zone'}
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showCreateSiteModal && (
+                <div className="modal-overlay" onClick={() => setShowCreateSiteModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Creer un site</h2>
+                            <button
+                                type="button"
+                                className="close-button"
+                                onClick={() => setShowCreateSiteModal(false)}
+                                aria-label="Fermer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <form className="modal-body sites-zones-form" onSubmit={handleCreateSite}>
+                            <label>
+                                Nom du site
+                                <input
+                                    type="text"
+                                    value={siteForm.name}
+                                    onChange={(event) => setSiteForm((prev) => ({ ...prev, name: event.target.value }))}
+                                    placeholder="Ex: Mairie Centre-Ville"
+                                    maxLength={120}
+                                    autoFocus
+                                />
+                            </label>
+
+                            <label>
+                                Adresse (optionnel)
+                                <textarea
+                                    value={siteForm.address}
+                                    onChange={(event) => setSiteForm((prev) => ({ ...prev, address: event.target.value }))}
+                                    placeholder="Ex: 12 Place de la Republique, 75000 Paris"
+                                    maxLength={500}
+                                    rows={3}
+                                />
+                            </label>
+
+                            <div className="modal-footer">
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowCreateSiteModal(false)}
+                                >
+                                    Annuler
+                                </button>
+                                <button
+                                    type="submit"
+                                    className="btn-primary"
+                                    disabled={createSiteLoading}
+                                >
+                                    {createSiteLoading ? 'Creation...' : 'Creer le site'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {showAddEquipmentModal && selectedRoomForEquipment && (
+                <div className="modal-overlay" onClick={() => setShowAddEquipmentModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Ajouter un equipement</h2>
+                            <button
+                                type="button"
+                                className="close-button"
+                                onClick={() => setShowAddEquipmentModal(false)}
+                                aria-label="Fermer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <form className="modal-body sites-zones-form" onSubmit={handleAddEquipmentToRoom}>
+                            <p>Zone cible: <strong>{selectedRoomForEquipment.name}</strong></p>
+
+                            <label>
+                                Equipement disponible
+                                <select
+                                    value={selectedDeviceToAdd}
+                                    onChange={(event) => setSelectedDeviceToAdd(event.target.value)}
+                                >
+                                    <option value="">Selectionnez un equipement</option>
+                                    {availableDevicesForModal.map((device) => (
+                                        <option key={device.id} value={device.id}>
+                                            {device.name}{device.category ? ` (${device.category})` : ''}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            {availableDevicesForModal.length === 0 && (
+                                <p className="tuya-hint">Tous les equipements sont deja affectes a cette zone.</p>
+                            )}
+
+                            <div className="modal-footer">
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowAddEquipmentModal(false)}
+                                >
+                                    Annuler
+                                </button>
+                                <button
+                                    type="submit"
+                                    className="btn-primary"
+                                    disabled={savingRoomId === selectedRoomForEquipment.id || availableDevicesForModal.length === 0}
+                                >
+                                    {savingRoomId === selectedRoomForEquipment.id ? 'Ajout...' : 'Ajouter'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {showRoomSettingsModal && selectedRoomForSettings && (
+                <div className="modal-overlay" onClick={() => setShowRoomSettingsModal(false)}>
+                    <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <h2>Parametres zone</h2>
+                            <button
+                                type="button"
+                                className="close-button"
+                                onClick={() => setShowRoomSettingsModal(false)}
+                                aria-label="Fermer"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="modal-body">
+                            <p>Zone: <strong>{selectedRoomForSettings.name}</strong></p>
+                            <div className="modal-footer" style={{ paddingInline: 0 }}>
+                                <button
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => setShowRoomSettingsModal(false)}
+                                >
+                                    Fermer
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn-danger"
+                                    onClick={async () => {
+                                        await handleDeleteRoom(selectedRoomForSettings);
+                                        setShowRoomSettingsModal(false);
+                                        setSelectedRoomForSettings(null);
+                                    }}
+                                    disabled={savingRoomId === selectedRoomForSettings.id}
+                                >
+                                    {savingRoomId === selectedRoomForSettings.id ? 'Suppression...' : 'Supprimer la zone'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </section>
     );
 }

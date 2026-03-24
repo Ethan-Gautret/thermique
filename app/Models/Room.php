@@ -8,6 +8,7 @@ class Room extends Model
 {
     protected $fillable = [
         'user_id',
+        'site_id',
         'category_id',
         'name',
         'description',
@@ -30,5 +31,10 @@ class Room extends Model
     public function category()
     {
         return $this->belongsTo(Category::class);
+    }
+
+    public function site()
+    {
+        return $this->belongsTo(Site::class);
     }
 }
