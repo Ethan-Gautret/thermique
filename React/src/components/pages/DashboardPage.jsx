@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import tuyaService from '../../services/tuya';
+import sitesZonesService from '../../services/sitesZones';
 
 const temperatureCodes = ['va_temperature', 'temp_current', 'temperature', 'cur_temperature', 'cur_temp'];
 
@@ -202,30 +203,6 @@ function temperatureToChartY(value, min, max) {
     return height - normalized * height;
 }
 
-const sites = [
-    {
-        name: 'Mairie Centre-Ville',
-        address: '12 Place de la Republique, 75000 Paris',
-        temperature: '20.6 C',
-        devices: '4/4',
-        badge: 'public',
-    },
-    {
-        name: 'Camping Les Pins',
-        address: 'Route de la Mer, 33000 Bordeaux',
-        temperature: '14.9 C',
-        devices: '0/3',
-        badge: 'hospitality',
-    },
-    {
-        name: 'Entrepot Logistique Nord',
-        address: 'ZI du Nord, 59000 Lille',
-        temperature: '18.6 C',
-        devices: '2/2',
-        badge: 'industrial',
-    },
-];
-
 const upcomingActions = [
     {
         title: 'Chauffage bureaux - Matin',
@@ -257,15 +234,23 @@ export default function DashboardPage() {
         temperatureSeries: [],
         hoursWithData: 0,
     });
+    const [siteOverview, setSiteOverview] = useState({
+        loading: true,
+        items: [],
+    });
 
     useEffect(() => {
         const loadDeviceStats = async () => {
             try {
-                const [devicesResponse, seriesResponse] = await Promise.all([
+                const [devicesResponse, seriesResponse, sitesResponse, roomsResponse] = await Promise.all([
                     tuyaService.getDevices(),
                     tuyaService.getDailyTemperatureSeries(),
+                    sitesZonesService.getSites(),
+                    sitesZonesService.getRooms(),
                 ]);
                 const devices = devicesResponse.data?.data || [];
+                const sites = sitesResponse.data?.data || [];
+                const rooms = roomsResponse.data?.data || [];
                 const online = devices.filter((device) => device.online).length;
                 const temperatureSeriesRaw = seriesResponse.data?.data?.series || [];
                 const temperatureSeries = temperatureSeriesRaw
@@ -293,6 +278,46 @@ export default function DashboardPage() {
                     temperatureSeries,
                     hoursWithData: Number(seriesResponse.data?.data?.meta?.hoursWithData || 0),
                 });
+
+                const deviceById = new Map(devices.map((device) => [String(device.id), device]));
+
+                const items = sites.map((site) => {
+                    const siteRooms = rooms.filter((room) => Number(room.siteId) === Number(site.id));
+                    const roomNames = siteRooms.map((room) => room.name).filter(Boolean);
+                    const uniqueDeviceIds = Array.from(new Set(
+                        siteRooms.flatMap((room) => Array.isArray(room.deviceIds) ? room.deviceIds : [])
+                    ));
+                    const mappedDevices = uniqueDeviceIds
+                        .map((deviceId) => deviceById.get(String(deviceId)))
+                        .filter(Boolean);
+
+                    const onlineCount = mappedDevices.filter((device) => Boolean(device.online)).length;
+
+                    const temperatures = mappedDevices
+                        .map((device) => extractDeviceTemperature(device))
+                        .filter((value) => Number.isFinite(value));
+
+                    const averageTemperature = temperatures.length > 0
+                        ? (temperatures.reduce((sum, value) => sum + value, 0) / temperatures.length)
+                        : null;
+
+                    return {
+                        id: site.id,
+                        name: site.name,
+                        address: site.address,
+                        roomsCount: siteRooms.length,
+                        roomNames,
+                        devicesTotal: mappedDevices.length,
+                        devicesOnline: onlineCount,
+                        averageTemperature,
+                        createdAt: site.createdAt,
+                    };
+                });
+
+                setSiteOverview({
+                    loading: false,
+                    items,
+                });
             } catch {
                 setDeviceStats({
                     loading: false,
@@ -302,6 +327,10 @@ export default function DashboardPage() {
                     temperatureDeviceCount: 0,
                     temperatureSeries: [],
                     hoursWithData: 0,
+                });
+                setSiteOverview({
+                    loading: false,
+                    items: [],
                 });
             }
         };
@@ -495,23 +524,40 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="site-grid">
-                    {sites.map((site) => (
-                        <article key={site.name} className="site-card">
+                    {siteOverview.loading && (
+                        <p className="tuya-hint">Chargement des sites...</p>
+                    )}
+
+                    {!siteOverview.loading && siteOverview.items.length === 0 && (
+                        <p className="tuya-hint">Aucun site enregistre pour le moment.</p>
+                    )}
+
+                    {!siteOverview.loading && siteOverview.items.map((site) => (
+                        <article key={site.id} className="site-card">
                             <div className="site-head">
                                 <h3>{site.name}</h3>
-                                <span>{site.badge}</span>
+                                <span>{site.roomsCount} piece(s)</span>
                             </div>
-                            <p>{site.address}</p>
+                            <p>{site.address || 'Adresse non renseignee'}</p>
                             <div className="site-metrics">
                                 <div>
-                                    <small>Temperature</small>
-                                    <strong>{site.temperature}</strong>
+                                    <small>Temperature moyenne</small>
+                                    <strong>
+                                        {site.averageTemperature === null
+                                            ? 'N/A'
+                                            : `${site.averageTemperature.toFixed(1)} C`}
+                                    </strong>
                                 </div>
                                 <div>
-                                    <small>Actifs</small>
-                                    <strong>{site.devices}</strong>
+                                    <small>Equipements actifs</small>
+                                    <strong>{site.devicesOnline}/{site.devicesTotal}</strong>
                                 </div>
                             </div>
+                            <p className="action-meta">
+                                {site.roomNames.length > 0
+                                    ? `Pieces: ${site.roomNames.slice(0, 3).join(', ')}${site.roomNames.length > 3 ? '...' : ''}`
+                                    : 'Aucune piece associee'}
+                            </p>
                         </article>
                     ))}
                 </div>
