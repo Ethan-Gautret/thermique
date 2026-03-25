@@ -5,6 +5,8 @@ const sitesZonesService = {
 
     createSite: (payload) => api.post('/sites-zones/sites', payload),
 
+    deleteSite: (siteId) => api.delete(`/sites-zones/sites/${siteId}`),
+
     getRooms: () => api.get('/sites-zones/rooms'),
 
     syncTuyaRooms: () => api.post('/sites-zones/sync-tuya'),

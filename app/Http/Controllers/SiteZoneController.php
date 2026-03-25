@@ -50,6 +50,25 @@ class SiteZoneController extends Controller
         ], 201);
     }
 
+    public function sitesDestroy(Site $site)
+    {
+        // Verify the site belongs to the authenticated user
+        if ($site->user_id !== Auth::id()) {
+            return response()->json([
+                'message' => 'Non autorise.',
+            ], 403);
+        }
+
+        // Delete all rooms associated with this site
+        Room::where('site_id', $site->id)->update(['site_id' => null]);
+
+        $site->delete();
+
+        return response()->json([
+            'message' => 'Site supprime avec succes.',
+        ], 200);
+    }
+
     public function index()
     {
         $rooms = Room::where('user_id', Auth::id())

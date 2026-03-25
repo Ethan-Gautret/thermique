@@ -12,6 +12,7 @@ export default function SitesZonesPage() {
     const [savingRoomId, setSavingRoomId] = useState(null);
     const [createLoading, setCreateLoading] = useState(false);
     const [createSiteLoading, setCreateSiteLoading] = useState(false);
+    const [deletingSiteId, setDeletingSiteId] = useState(null);
     const [attachZoneLoading, setAttachZoneLoading] = useState(false);
     const [error, setError] = useState('');
     const [feedback, setFeedback] = useState('');
@@ -20,6 +21,7 @@ export default function SitesZonesPage() {
     const [createZoneMode, setCreateZoneMode] = useState('create');
     const [selectedExistingRoomId, setSelectedExistingRoomId] = useState('');
     const [showCreateRoomModal, setShowCreateRoomModal] = useState(false);
+    const [selectedSiteForModal, setSelectedSiteForModal] = useState(null);
     const [showCreateSiteModal, setShowCreateSiteModal] = useState(false);
     const [showRoomSettingsModal, setShowRoomSettingsModal] = useState(false);
     const [selectedRoomForSettings, setSelectedRoomForSettings] = useState(null);
@@ -412,13 +414,37 @@ export default function SitesZonesPage() {
         }
     };
 
-    const openCreateRoomModal = (siteId = '') => {
+    const openCreateRoomModal = (site) => {
         setError('');
         setFeedback('');
         setCreateZoneMode('create');
         setSelectedExistingRoomId('');
-        setForm({ name: '', description: '', siteId, createInTuya: true });
+        setForm({ name: '', description: '', siteId: site.id, createInTuya: true });
+        setSelectedSiteForModal(site);
         setShowCreateRoomModal(true);
+    };
+
+    const handleDeleteSite = async (site) => {
+        if (!confirm(`Êtes-vous sûr de vouloir supprimer le site "${site.name}" ? Les pieces associees seront detachees de ce site.`)) {
+            return;
+        }
+
+        setError('');
+        setFeedback('');
+        setDeletingSiteId(site.id);
+
+        try {
+            await sitesZonesService.deleteSite(site.id);
+            setSites((prev) => prev.filter((s) => s.id !== site.id));
+            setShowCreateRoomModal(false);
+            setSelectedSiteForModal(null);
+            setFeedback(`Site "${site.name}" supprime avec succes.`);
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de supprimer ce site.';
+            setError(message);
+        } finally {
+            setDeletingSiteId(null);
+        }
     };
 
     const handleAttachExistingZone = async (event) => {
@@ -553,7 +579,7 @@ export default function SitesZonesPage() {
                                             <button
                                                 type="button"
                                                 className="site-edit-btn"
-                                                onClick={() => openCreateRoomModal(site.id)}
+                                                onClick={() => openCreateRoomModal(site)}
                                             >
                                                 Parametres
                                             </button>
@@ -750,14 +776,20 @@ export default function SitesZonesPage() {
             </div>
 
             {showCreateRoomModal && (
-                <div className="modal-overlay" onClick={() => setShowCreateRoomModal(false)}>
+                <div className="modal-overlay" onClick={() => {
+                    setShowCreateRoomModal(false);
+                    setSelectedSiteForModal(null);
+                }}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
                             <h2>📍 Gérer les pieces du site</h2>
                             <button
                                 type="button"
                                 className="close-button"
-                                onClick={() => setShowCreateRoomModal(false)}
+                                onClick={() => {
+                                    setShowCreateRoomModal(false);
+                                    setSelectedSiteForModal(null);
+                                }}
                                 aria-label="Fermer"
                             >
                                 ✕
@@ -820,7 +852,10 @@ export default function SitesZonesPage() {
                                         <button
                                             type="button"
                                             className="btn-secondary"
-                                            onClick={() => setShowCreateRoomModal(false)}
+                                            onClick={() => {
+                                                setShowCreateRoomModal(false);
+                                                setSelectedSiteForModal(null);
+                                            }}
                                         >
                                             Annuler
                                         </button>
@@ -858,6 +893,24 @@ export default function SitesZonesPage() {
                                     </div>
                                 )}
                             </div>
+
+                            {selectedSiteForModal && (
+                                <div className="site-zone-management" style={{ borderTop: '1px solid #ddd', marginTop: '2rem', paddingTop: '2rem' }}>
+                                    <h3>Supprimer ce site</h3>
+                                    <p className="tuya-hint">Cette action supprimera le site et detachera toutes les pieces associees.</p>
+                                    <div className="site-zone-management-list">
+                                        <button
+                                            type="button"
+                                            className="btn-danger"
+                                            onClick={() => handleDeleteSite(selectedSiteForModal)}
+                                            disabled={deletingSiteId === selectedSiteForModal.id}
+                                            style={{ width: '100%', marginTop: '1rem' }}
+                                        >
+                                            {deletingSiteId === selectedSiteForModal.id ? 'Suppression en cours...' : '🗑️ Supprimer le site'}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
 
                             {createZoneMode === 'create' && (
                                 <form className="sites-zones-form-inner" onSubmit={handleCreateRoom}>
@@ -900,7 +953,10 @@ export default function SitesZonesPage() {
                                         <button
                                             type="button"
                                             className="btn-secondary"
-                                            onClick={() => setShowCreateRoomModal(false)}
+                                            onClick={() => {
+                                                setShowCreateRoomModal(false);
+                                                setSelectedSiteForModal(null);
+                                            }}
                                         >
                                             Annuler
                                         </button>
