@@ -337,10 +337,26 @@ a {
 
 .chart-axis {
     margin-top: 0.55rem;
-    display: grid;
+    position: relative;
+    min-height: 1rem;
     color: #64748b;
     font-size: 0.73rem;
     font-weight: 500;
+}
+
+.chart-axis-label {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+.chart-axis-label.start {
+    transform: translateX(0);
+}
+
+.chart-axis-label.end {
+    transform: translateX(-100%);
 }
 
 .actions-list {

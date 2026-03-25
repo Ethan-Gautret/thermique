@@ -119,7 +119,7 @@ function buildLastHoursPoints(series, hours = 12) {
         slot.setHours(now.getHours() - (hours - 1 - index));
 
         const key = slot.toISOString();
-        const label = `${String(slot.getHours()).padStart(2, '0')}:00`;
+        const label = `${slot.getHours()}h`;
 
         return {
             label,
@@ -487,10 +487,16 @@ export default function DashboardPage() {
 
                                 <div
                                     className="chart-axis"
-                                    style={{ gridTemplateColumns: `repeat(${chartPoints.length}, minmax(0, 1fr))` }}
+                                    aria-hidden="true"
                                 >
                                     {chartPoints.map((point, index) => (
-                                        <span key={point.hourBucket || point.label}>{index % 2 === 0 ? point.label : ''}</span>
+                                        <span
+                                            key={point.hourBucket || point.label}
+                                            className={`chart-axis-label ${index === 0 ? 'start' : ''} ${index === chartPoints.length - 1 ? 'end' : ''}`}
+                                            style={{ left: `${(index / Math.max(chartPoints.length - 1, 1)) * 100}%` }}
+                                        >
+                                            {point.label}
+                                        </span>
                                     ))}
                                 </div>
                             </div>
