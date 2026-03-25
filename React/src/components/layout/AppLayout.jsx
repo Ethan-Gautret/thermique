@@ -6,7 +6,7 @@ const navItems = [
     { to: '/', label: 'Dashboard', icon: '▦' },
     { to: '/calendrier', label: 'Calendrier', icon: '◷' },
     { to: '/equipements', label: 'Equipements', icon: '◉' },
-    { to: '/sites-zones', label: 'Sites & Zones', icon: '⌂' },
+    { to: '/sites-zones', label: 'Sites & Pieces', icon: '⌂' },
     { to: '/scenarios', label: 'Scenarios', icon: '≋' },
     { to: '/automations', label: 'Automations', icon: '⚙' },
     { to: '/alertes', label: 'Alertes', icon: '!' },

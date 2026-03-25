@@ -196,6 +196,7 @@ class SiteZoneController extends Controller
             'name' => 'required|string|max:120',
             'description' => 'nullable|string|max:500',
             'siteId' => 'nullable|integer',
+            'requireTuyaSync' => 'nullable|boolean',
             'deviceIds' => 'nullable|array',
             'deviceIds.*' => 'string|max:120',
         ]);
@@ -204,15 +205,36 @@ class SiteZoneController extends Controller
             return response()->json(['message' => 'Site invalide.'], 422);
         }
 
+        $deviceIds = array_key_exists('deviceIds', $validated)
+            ? $this->normalizeDeviceIds($validated['deviceIds'])
+            : [];
+        $requireTuyaSync = $validated['requireTuyaSync'] ?? true;
+
+        $conflicts = $this->findConflictingDeviceAssignments($deviceIds);
+        if (!empty($conflicts)) {
+            return response()->json([
+                'message' => $this->buildDeviceConflictMessage($conflicts),
+                'conflicts' => $conflicts,
+            ], 422);
+        }
+
         $room = Room::create([
             'user_id' => Auth::id(),
             'site_id' => $validated['siteId'] ?? null,
             'name' => $validated['name'],
             'description' => $validated['description'] ?? null,
-            'device_ids' => $validated['deviceIds'] ?? [],
+            'device_ids' => $deviceIds,
         ]);
 
         $syncWarning = $this->syncRoomToTuya($room, false);
+
+        if ($requireTuyaSync && empty($room->tuya_room_id)) {
+            $room->delete();
+
+            return response()->json([
+                'message' => $syncWarning ?: 'Impossible de creer la piece dans Tuya. Verifiez la connexion Tuya et Home ID.',
+            ], 422);
+        }
 
         return response()->json([
             'message' => $syncWarning ?: 'Piece creee avec succes.',
@@ -240,6 +262,19 @@ class SiteZoneController extends Controller
             return response()->json(['message' => 'Site invalide.'], 422);
         }
 
+        $normalizedDeviceIds = null;
+        if (array_key_exists('deviceIds', $validated)) {
+            $normalizedDeviceIds = $this->normalizeDeviceIds($validated['deviceIds']);
+            $conflicts = $this->findConflictingDeviceAssignments($normalizedDeviceIds, $room->id);
+
+            if (!empty($conflicts)) {
+                return response()->json([
+                    'message' => $this->buildDeviceConflictMessage($conflicts),
+                    'conflicts' => $conflicts,
+                ], 422);
+            }
+        }
+
         if (empty($validated)) {
             return response()->json(['message' => 'Aucune modification a appliquer.'], 422);
         }
@@ -257,7 +292,7 @@ class SiteZoneController extends Controller
         }
 
         if (array_key_exists('deviceIds', $validated)) {
-            $room->device_ids = array_values(array_unique($validated['deviceIds']));
+            $room->device_ids = $normalizedDeviceIds;
         }
 
         $room->save();
@@ -309,15 +344,16 @@ class SiteZoneController extends Controller
                 $this->updateRemoteRoom($connection, $room);
             }
 
-            if (!empty($room->tuya_room_id)) {
-                $this->syncRemoteRoomDevices($connection, $room);
+            $deviceSyncWarning = null;
+            if (!empty($room->tuya_room_id) && !empty($room->device_ids)) {
+                $deviceSyncWarning = $this->syncRemoteRoomDevices($connection, $room);
             }
 
             $room->last_sync_error = null;
             $room->synced_at = now();
             $room->save();
 
-            return null;
+            return $deviceSyncWarning ?: null;
         } catch (\Throwable $e) {
             if (str_contains((string) $e->getMessage(), 'TUYA_ROOM_API_UNSUPPORTED')) {
                 $room->last_sync_error = null;
@@ -354,24 +390,43 @@ class SiteZoneController extends Controller
             return 'Piece supprimee localement. Suppression distante Tuya non executee (Home ID manquant).';
         }
 
+        \Log::info("DELETE Tuya Room - Room ID: {$room->id}, Tuya Room ID: {$room->tuya_room_id}, Home ID: {$connection->home_id}");
+
         $deletePaths = [
-            "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
+            "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/iot-03/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
         ];
 
         $errors = [];
+        $codes = [];
 
         foreach ($deletePaths as $path) {
+            \Log::info("Testing DELETE endpoint: {$path}");
             $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'DELETE', $path);
             $payload = $response->json() ?: [];
 
+            \Log::info("DELETE response", [
+                'status' => $response->status(),
+                'code' => $payload['code'] ?? null,
+                'success' => $payload['success'] ?? null,
+                'payload' => $payload,
+            ]);
+
             if ($this->isTuyaSuccess($response, $payload)) {
+                \Log::info("DELETE SUCCESSFUL for path: {$path}");
                 return null;
             }
 
             $errors[] = $this->formatTuyaError($path, $response, $payload);
+            $codes[] = (int) ($payload['code'] ?? $response->status());
+        }
+
+        \Log::error("DELETE FAILED for all endpoints", ['codes' => $codes, 'errors' => $errors]);
+
+        if (!empty($codes) && count(array_unique($codes)) === 1 && $codes[0] === 1108) {
+            return 'Piece supprimee localement. L\'API Tuya de gestion des pieces n\'est pas disponible sur ce projet (code 1108 uri path invalid).';
         }
 
         return 'Piece supprimee localement, mais la suppression Tuya/Smart Life a echoue. ' . implode(' | ', $errors);
@@ -380,6 +435,7 @@ class SiteZoneController extends Controller
     private function createRemoteRoom(TuyaConnection $connection, Room $room): string
     {
         $paths = [
+            "/v1.0/homes/{$connection->home_id}/room",
             "/v1.0/iot-03/homes/{$connection->home_id}/rooms",
             "/v1.0/homes/{$connection->home_id}/rooms",
             "/v1.0/iot-03/families/{$connection->home_id}/rooms",
@@ -396,17 +452,14 @@ class SiteZoneController extends Controller
             $payload = $response->json() ?: [];
 
             if ($this->isTuyaSuccess($response, $payload)) {
-                $result = $payload['result'] ?? null;
-
-                if (is_string($result) && $result !== '') {
-                    return $result;
+                $candidate = $this->extractTuyaRoomIdFromCreatePayload($payload);
+                if (!is_null($candidate)) {
+                    return $candidate;
                 }
 
-                if (is_array($result)) {
-                    $candidate = $result['id'] ?? $result['room_id'] ?? null;
-                    if (is_scalar($candidate)) {
-                        return (string) $candidate;
-                    }
+                $fallbackId = $this->resolveCreatedRoomIdFromListing($connection, $room->name);
+                if (!is_null($fallbackId)) {
+                    return $fallbackId;
                 }
 
                 throw new \RuntimeException('ID de piece Tuya non retourne.');
@@ -429,11 +482,71 @@ class SiteZoneController extends Controller
         );
     }
 
+    private function extractTuyaRoomIdFromCreatePayload(array $payload): ?string
+    {
+        $result = $payload['result'] ?? null;
+
+        if (is_scalar($result) && trim((string) $result) !== '') {
+            return (string) $result;
+        }
+
+        if (!is_array($result)) {
+            return null;
+        }
+
+        $candidates = [
+            $result['id'] ?? null,
+            $result['room_id'] ?? null,
+            $result['roomId'] ?? null,
+            $result['data']['id'] ?? null,
+            $result['data']['room_id'] ?? null,
+            $result['data']['roomId'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                return (string) $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveCreatedRoomIdFromListing(TuyaConnection $connection, string $roomName): ?string
+    {
+        $rooms = $this->fetchTuyaRooms($connection);
+        if (empty($rooms)) {
+            return null;
+        }
+
+        foreach ($rooms as $tuyaRoom) {
+            if (!is_array($tuyaRoom)) {
+                continue;
+            }
+
+            $candidateName = $tuyaRoom['name'] ?? null;
+            if (!is_scalar($candidateName)) {
+                continue;
+            }
+
+            if (trim((string) $candidateName) !== trim($roomName)) {
+                continue;
+            }
+
+            $candidateId = $tuyaRoom['id'] ?? $tuyaRoom['room_id'] ?? $tuyaRoom['roomId'] ?? null;
+            if (is_scalar($candidateId) && trim((string) $candidateId) !== '') {
+                return (string) $candidateId;
+            }
+        }
+
+        return null;
+    }
+
     private function updateRemoteRoom(TuyaConnection $connection, Room $room): void
     {
         $paths = [
-            "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
+            "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/iot-03/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
             "/v1.0/families/{$connection->home_id}/rooms/{$room->tuya_room_id}",
         ];
@@ -456,7 +569,7 @@ class SiteZoneController extends Controller
         throw new \RuntimeException('Impossible de renommer la piece dans Tuya. ' . implode(' | ', $errors));
     }
 
-    private function syncRemoteRoomDevices(TuyaConnection $connection, Room $room): void
+    private function syncRemoteRoomDevices(TuyaConnection $connection, Room $room): ?string
     {
         $paths = [
             "/v1.0/iot-03/homes/{$connection->home_id}/rooms/{$room->tuya_room_id}/devices",
@@ -470,16 +583,22 @@ class SiteZoneController extends Controller
         ];
 
         $errors = [];
+        $codes = [];
 
         foreach ($paths as $path) {
             $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'PUT', $path, $body);
             $payload = $response->json() ?: [];
 
             if ($this->isTuyaSuccess($response, $payload)) {
-                return;
+                return null;
             }
 
             $errors[] = $this->formatTuyaError($path, $response, $payload);
+            $codes[] = (int) ($payload['code'] ?? $response->status());
+        }
+
+        if (!empty($codes) && count(array_unique($codes)) === 1 && $codes[0] === 1106) {
+            return 'Equipements assigns localement. Les permissions Tuya ne permettent pas d\'affecter les equipements aux pieces. Vous pouvez les gerer directement dans l\'app Tuya.';
         }
 
         throw new \RuntimeException('Impossible d\'affecter les equipements a la piece dans Tuya. ' . implode(' | ', $errors));
@@ -587,7 +706,10 @@ class SiteZoneController extends Controller
         $nonce = bin2hex(random_bytes(8));
         $method = strtoupper($method);
         $jsonBody = $body ? json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
-        $contentHash = hash('sha256', $jsonBody ?: '');
+        
+        // Pour DELETE, le corps doit être vide (pas '{}') pour que la signature soit valide
+        $bodyToSend = ($method === 'DELETE') ? '' : ($jsonBody ?: '{}');
+        $contentHash = hash('sha256', $bodyToSend);
         $stringToSign = "{$method}\n{$contentHash}\n\n{$path}";
         $signPayload = $connection->client_id . $connection->access_token . $timestamp . $nonce . $stringToSign;
         $sign = strtoupper(hash_hmac('sha256', $signPayload, $connection->client_secret));
@@ -617,7 +739,7 @@ class SiteZoneController extends Controller
         }
 
         if ($method === 'DELETE') {
-            return $request->withBody($jsonBody ?: '{}', 'application/json')->delete("{$baseUrl}{$path}");
+            return $request->delete("{$baseUrl}{$path}");
         }
 
         throw new \InvalidArgumentException('Methode HTTP Tuya non supportee: ' . $method);
@@ -719,5 +841,58 @@ class SiteZoneController extends Controller
         return Site::where('id', $siteId)
             ->where('user_id', Auth::id())
             ->exists();
+    }
+
+    private function normalizeDeviceIds(array $deviceIds): array
+    {
+        return array_values(array_unique(array_filter(array_map(
+            static fn ($id) => is_scalar($id) ? trim((string) $id) : '',
+            $deviceIds
+        ))));
+    }
+
+    private function findConflictingDeviceAssignments(array $deviceIds, ?int $excludeRoomId = null): array
+    {
+        if (empty($deviceIds)) {
+            return [];
+        }
+
+        $roomsQuery = Room::where('user_id', Auth::id())
+            ->select(['id', 'name', 'device_ids']);
+
+        if (!is_null($excludeRoomId)) {
+            $roomsQuery->where('id', '!=', $excludeRoomId);
+        }
+
+        $rooms = $roomsQuery->get();
+        $targetIds = array_flip($deviceIds);
+        $conflicts = [];
+
+        foreach ($rooms as $existingRoom) {
+            $existingDeviceIds = is_array($existingRoom->device_ids)
+                ? $this->normalizeDeviceIds($existingRoom->device_ids)
+                : [];
+
+            foreach ($existingDeviceIds as $existingDeviceId) {
+                if (!isset($targetIds[$existingDeviceId])) {
+                    continue;
+                }
+
+                $conflicts[] = [
+                    'deviceId' => $existingDeviceId,
+                    'roomId' => $existingRoom->id,
+                    'roomName' => $existingRoom->name,
+                ];
+            }
+        }
+
+        return $conflicts;
+    }
+
+    private function buildDeviceConflictMessage(array $conflicts): string
+    {
+        $devices = implode(', ', array_values(array_unique(array_column($conflicts, 'deviceId'))));
+
+        return 'Impossible d\'associer ces equipements a cette zone: deja utilises dans une autre zone (' . $devices . ').';
     }
 }

@@ -15,7 +15,7 @@ export default function SitesZonesPage() {
     const [attachZoneLoading, setAttachZoneLoading] = useState(false);
     const [error, setError] = useState('');
     const [feedback, setFeedback] = useState('');
-    const [form, setForm] = useState({ name: '', description: '', siteId: '' });
+    const [form, setForm] = useState({ name: '', description: '', siteId: '', createInTuya: true });
     const [siteForm, setSiteForm] = useState({ name: '', address: '' });
     const [createZoneMode, setCreateZoneMode] = useState('create');
     const [selectedExistingRoomId, setSelectedExistingRoomId] = useState('');
@@ -26,6 +26,20 @@ export default function SitesZonesPage() {
     const [showAddEquipmentModal, setShowAddEquipmentModal] = useState(false);
     const [selectedRoomForEquipment, setSelectedRoomForEquipment] = useState(null);
     const [selectedDeviceToAdd, setSelectedDeviceToAdd] = useState('');
+    const [editingRoomId, setEditingRoomId] = useState(null);
+    const [editingRoomName, setEditingRoomName] = useState('');
+
+    const getRoomSyncLabel = (room) => {
+        if (room?.syncStatus === 'warning') {
+            return 'Erreur sync Tuya';
+        }
+
+        if (room?.syncStatus === 'synced' || room?.tuyaRoomId) {
+            return 'Creee dans Tuya';
+        }
+
+        return 'Locale uniquement';
+    };
 
     const loadRoomsFromTuya = async ({ silent = false } = {}) => {
         try {
@@ -108,12 +122,21 @@ export default function SitesZonesPage() {
             return [];
         }
 
+        const selectedRoomId = selectedRoomForEquipment.id;
         const selectedIds = Array.isArray(selectedRoomForEquipment.deviceIds)
             ? selectedRoomForEquipment.deviceIds
             : [];
 
-        return devices.filter((device) => !selectedIds.includes(device.id));
-    }, [devices, selectedRoomForEquipment]);
+        const assignedToOtherRooms = new Set(
+            rooms
+                .filter((room) => room.id !== selectedRoomId)
+                .flatMap((room) => (Array.isArray(room.deviceIds) ? room.deviceIds : []))
+        );
+
+        return devices.filter(
+            (device) => !selectedIds.includes(device.id) && !assignedToOtherRooms.has(device.id)
+        );
+    }, [devices, rooms, selectedRoomForEquipment]);
 
     const loadSites = async () => {
         setLoadingSites(true);
@@ -185,15 +208,17 @@ export default function SitesZonesPage() {
                 name: form.name.trim(),
                 description: form.description.trim() || null,
                 siteId: form.siteId === '' ? null : Number(form.siteId),
+                requireTuyaSync: form.createInTuya,
             });
 
             const createdRoom = response.data?.data;
+            const apiMessage = response.data?.message;
             if (createdRoom) {
                 setRooms((prev) => [...prev, createdRoom].sort((a, b) => a.name.localeCompare(b.name)));
             }
 
-            setForm({ name: '', description: '', siteId: '' });
-            setFeedback('Piece creee. Vous pouvez maintenant y affecter des equipements.');
+            setForm({ name: '', description: '', siteId: '', createInTuya: true });
+            setFeedback(apiMessage || 'Piece creee. Vous pouvez maintenant y affecter des equipements.');
             setTimeout(() => setShowCreateRoomModal(false), 1500);
         } catch (err) {
             const message = err.response?.data?.message || 'Creation impossible pour le moment.';
@@ -280,11 +305,51 @@ export default function SitesZonesPage() {
         setFeedback('');
 
         try {
-            await sitesZonesService.deleteRoom(room.id);
+            const response = await sitesZonesService.deleteRoom(room.id);
             setRooms((prev) => prev.filter((item) => item.id !== room.id));
-            setFeedback(`Piece ${room.name} supprimee.`);
+            const apiMessage = response.data?.message;
+            setFeedback(apiMessage || `Piece ${room.name} supprimee.`);
         } catch (err) {
             const message = err.response?.data?.message || 'Impossible de supprimer cette piece.';
+            setError(message);
+        } finally {
+            setSavingRoomId(null);
+        }
+    };
+
+    const handleUpdateRoomName = async () => {
+        const trimmedName = editingRoomName.trim();
+
+        if (!trimmedName) {
+            setError('Le nom de la piece est obligatoire.');
+            return;
+        }
+
+        if (trimmedName === selectedRoomForSettings.name) {
+            setError('Le nouveau nom est identique a l\'ancien');
+            return;
+        }
+
+        setSavingRoomId(selectedRoomForSettings.id);
+        setError('');
+        setFeedback('');
+
+        try {
+            const response = await sitesZonesService.updateRoom(selectedRoomForSettings.id, {
+                name: trimmedName,
+            });
+
+            const updatedRoom = response.data?.data;
+            if (updatedRoom) {
+                setRooms((prev) => prev.map((item) => (item.id === updatedRoom.id ? updatedRoom : item)));
+                setSelectedRoomForSettings(updatedRoom);
+            }
+
+            setEditingRoomId(null);
+            setEditingRoomName('');
+            setFeedback(`Piece renommee en \"${trimmedName}\".`);
+        } catch (err) {
+            const message = err.response?.data?.message || 'Impossible de renommer cette piece.';
             setError(message);
         } finally {
             setSavingRoomId(null);
@@ -304,9 +369,9 @@ export default function SitesZonesPage() {
                 setRooms((prev) => prev.map((item) => (item.id === updatedRoom.id ? updatedRoom : item)));
             }
 
-            setFeedback(`Zone ${room.name} retiree du site.`);
+            setFeedback(`Piece ${room.name} retiree du site.`);
         } catch (err) {
-            const message = err.response?.data?.message || 'Impossible de retirer cette zone du site.';
+            const message = err.response?.data?.message || 'Impossible de retirer cette piece du site.';
             setError(message);
         } finally {
             setSavingRoomId(null);
@@ -352,7 +417,7 @@ export default function SitesZonesPage() {
         setFeedback('');
         setCreateZoneMode('create');
         setSelectedExistingRoomId('');
-        setForm({ name: '', description: '', siteId });
+        setForm({ name: '', description: '', siteId, createInTuya: true });
         setShowCreateRoomModal(true);
     };
 
@@ -362,7 +427,7 @@ export default function SitesZonesPage() {
         setFeedback('');
 
         if (!selectedExistingRoomId) {
-            setError('Selectionnez une zone existante a affecter.');
+            setError('Selectionnez une piece existante a affecter.');
             return;
         }
 
@@ -373,7 +438,7 @@ export default function SitesZonesPage() {
 
         const roomToAttach = rooms.find((room) => room.id === Number(selectedExistingRoomId));
         if (!roomToAttach) {
-            setError('Zone introuvable.');
+            setError('Piece introuvable.');
             return;
         }
 
@@ -389,10 +454,10 @@ export default function SitesZonesPage() {
                 setRooms((prev) => prev.map((item) => (item.id === updatedRoom.id ? updatedRoom : item)));
             }
 
-            setFeedback(`Zone ${roomToAttach.name} affectee au site.`);
+            setFeedback(`Piece ${roomToAttach.name} affectee au site.`);
             setShowCreateRoomModal(false);
         } catch (err) {
-            const message = err.response?.data?.message || 'Impossible d affecter cette zone.';
+            const message = err.response?.data?.message || 'Impossible d affecter cette piece.';
             setError(message);
         } finally {
             setAttachZoneLoading(false);
@@ -403,7 +468,7 @@ export default function SitesZonesPage() {
         <section className="page-shell">
             <header className="page-header">
                 <div className="page-header-row">
-                    <h1>Sites & Zones</h1>
+                    <h1>Sites & Pieces</h1>
                     <div className="tuya-top-counter">Pieces Tuya: {tuyaRooms.length}</div>
                 </div>
                 <p>Gestion de l organisation multi-sites</p>
@@ -416,7 +481,7 @@ export default function SitesZonesPage() {
                         <p className="sz-stat-value">{sites.length}</p>
                     </article>
                     <article className="sz-stat-card">
-                        <p className="sz-stat-label">Zones</p>
+                        <p className="sz-stat-label">Pieces</p>
                         <p className="sz-stat-value">{rooms.length}</p>
                     </article>
                     <article className="sz-stat-card">
@@ -463,7 +528,7 @@ export default function SitesZonesPage() {
                     )}
 
                     {!loadingRooms && rooms.length === 0 && (
-                        <p className="tuya-hint">Aucune zone pour l instant. Creez-en une pour commencer.</p>
+                        <p className="tuya-hint">Aucune piece pour l instant. Creez-en une pour commencer.</p>
                     )}
 
                     {!loadingSites && sites.length > 0 && (
@@ -510,11 +575,11 @@ export default function SitesZonesPage() {
                                         </div>
 
                                         <div className="zones-section-head">
-                                            <h3>Zones ({siteRooms.length})</h3>
+                                            <h3>Pieces ({siteRooms.length})</h3>
                                         </div>
 
                                         {siteRooms.length === 0 && (
-                                            <p className="tuya-hint">Aucune zone affectee a ce site.</p>
+                                            <p className="tuya-hint">Aucune piece affectee a ce site.</p>
                                         )}
 
                                         {siteRooms.length > 0 && (
@@ -531,7 +596,7 @@ export default function SitesZonesPage() {
                                                                     <p>{room.description || 'Zone technique'}</p>
                                                                 </div>
                                                                 <div className="room-card-head-actions">
-                                                                    <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>Syncro</p>
+                                                                    <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>{getRoomSyncLabel(room)}</p>
                                                                     <button
                                                                         type="button"
                                                                         className="room-settings-btn"
@@ -618,10 +683,10 @@ export default function SitesZonesPage() {
                                             <div className="room-card-head">
                                                 <div>
                                                     <h3>{room.name}</h3>
-                                                    <p>{room.description || 'Zone technique'}</p>
+                                                    <p>{room.description || 'Piece technique'}</p>
                                                 </div>
                                                 <div className="room-card-head-actions">
-                                                    <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>Syncro</p>
+                                                    <p className={`room-sync-badge ${room.syncStatus || 'local'}`}>{getRoomSyncLabel(room)}</p>
                                                     <button
                                                         type="button"
                                                         className="room-settings-btn"
@@ -688,7 +753,7 @@ export default function SitesZonesPage() {
                 <div className="modal-overlay" onClick={() => setShowCreateRoomModal(false)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>📍 Gérer les zones du site</h2>
+                            <h2>📍 Gérer les pieces du site</h2>
                             <button
                                 type="button"
                                 className="close-button"
@@ -720,26 +785,26 @@ export default function SitesZonesPage() {
                                     className={`zone-mode-btn ${createZoneMode === 'existing' ? 'active' : ''}`}
                                     onClick={() => setCreateZoneMode('existing')}
                                 >
-                                    Selectionner une zone existante
+                                    Selectionner une piece existante
                                 </button>
                                 <button
                                     type="button"
                                     className={`zone-mode-btn ${createZoneMode === 'create' ? 'active' : ''}`}
                                     onClick={() => setCreateZoneMode('create')}
                                 >
-                                    Creer une nouvelle zone
+                                    Creer une nouvelle piece
                                 </button>
                             </div>
 
                             {createZoneMode === 'existing' && (
                                 <form onSubmit={handleAttachExistingZone} className="sites-zones-form-inner">
                                     <label>
-                                        Zone existante
+                                        Piece existante
                                         <select
                                             value={selectedExistingRoomId}
                                             onChange={(event) => setSelectedExistingRoomId(event.target.value)}
                                         >
-                                            <option value="">Selectionnez une zone</option>
+                                            <option value="">Selectionnez une piece</option>
                                             {existingZonesForAttach.map((room) => (
                                                 <option key={room.id} value={room.id}>
                                                     {room.name}{room.siteName ? ` (${room.siteName})` : ' (sans site)'}
@@ -764,16 +829,16 @@ export default function SitesZonesPage() {
                                             className="btn-primary"
                                             disabled={attachZoneLoading}
                                         >
-                                            {attachZoneLoading ? 'Affectation...' : 'Affecter la zone'}
+                                            {attachZoneLoading ? 'Affectation...' : 'Affecter la piece'}
                                         </button>
                                     </div>
                                 </form>
                             )}
 
                             <div className="site-zone-management">
-                                <h3>Retirer des zones du site</h3>
+                                <h3>Retirer des pieces du site</h3>
                                 {currentSiteRoomsForModal.length === 0 && (
-                                    <p className="tuya-hint">Aucune zone affectee a ce site.</p>
+                                    <p className="tuya-hint">Aucune piece affectee a ce site.</p>
                                 )}
                                 {currentSiteRoomsForModal.length > 0 && (
                                     <div className="site-zone-management-list">
@@ -797,7 +862,7 @@ export default function SitesZonesPage() {
                             {createZoneMode === 'create' && (
                                 <form className="sites-zones-form-inner" onSubmit={handleCreateRoom}>
                                     <label>
-                                        Nom de la zone
+                                        Nom de la piece
                                         <input
                                             type="text"
                                             value={form.name}
@@ -813,10 +878,19 @@ export default function SitesZonesPage() {
                                         <textarea
                                             value={form.description}
                                             onChange={(event) => setForm((prev) => ({ ...prev, description: event.target.value }))}
-                                            placeholder="Contexte thermique ou type de zone"
+                                            placeholder="Contexte thermique ou type de piece"
                                             maxLength={500}
                                             rows={4}
                                         />
+                                    </label>
+
+                                    <label>
+                                        <input
+                                            type="checkbox"
+                                            checked={Boolean(form.createInTuya)}
+                                            onChange={(event) => setForm((prev) => ({ ...prev, createInTuya: event.target.checked }))}
+                                        />
+                                        Creer aussi la piece dans Tuya
                                     </label>
 
                                     {error && <div className="tuya-feedback error"><p>{error}</p></div>}
@@ -835,7 +909,7 @@ export default function SitesZonesPage() {
                                             className="btn-primary"
                                             disabled={createLoading}
                                         >
-                                            {createLoading ? 'Création...' : 'Créer la zone'}
+                                            {createLoading ? 'Création...' : 'Créer la piece'}
                                         </button>
                                     </div>
                                 </form>
@@ -921,7 +995,7 @@ export default function SitesZonesPage() {
                         </div>
 
                         <form className="modal-body sites-zones-form" onSubmit={handleAddEquipmentToRoom}>
-                            <p>Zone cible: <strong>{selectedRoomForEquipment.name}</strong></p>
+                            <p>Piece cible: <strong>{selectedRoomForEquipment.name}</strong></p>
 
                             <label>
                                 Equipement disponible
@@ -939,7 +1013,7 @@ export default function SitesZonesPage() {
                             </label>
 
                             {availableDevicesForModal.length === 0 && (
-                                <p className="tuya-hint">Tous les equipements sont deja affectes a cette zone.</p>
+                                <p className="tuya-hint">Aucun equipement disponible: ils sont deja affectes a une zone.</p>
                             )}
 
                             <div className="modal-footer">
@@ -967,7 +1041,7 @@ export default function SitesZonesPage() {
                 <div className="modal-overlay" onClick={() => setShowRoomSettingsModal(false)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2>Parametres zone</h2>
+                            <h2>Parametres piece</h2>
                             <button
                                 type="button"
                                 className="close-button"
@@ -979,28 +1053,78 @@ export default function SitesZonesPage() {
                         </div>
 
                         <div className="modal-body">
-                            <p>Zone: <strong>{selectedRoomForSettings.name}</strong></p>
-                            <div className="modal-footer" style={{ paddingInline: 0 }}>
-                                <button
-                                    type="button"
-                                    className="btn-secondary"
-                                    onClick={() => setShowRoomSettingsModal(false)}
-                                >
-                                    Fermer
-                                </button>
-                                <button
-                                    type="button"
-                                    className="btn-danger"
-                                    onClick={async () => {
-                                        await handleDeleteRoom(selectedRoomForSettings);
-                                        setShowRoomSettingsModal(false);
-                                        setSelectedRoomForSettings(null);
-                                    }}
-                                    disabled={savingRoomId === selectedRoomForSettings.id}
-                                >
-                                    {savingRoomId === selectedRoomForSettings.id ? 'Suppression...' : 'Supprimer la zone'}
-                                </button>
-                            </div>
+                            {editingRoomId === selectedRoomForSettings.id ? (
+                                <form onSubmit={(e) => { e.preventDefault(); handleUpdateRoomName(); }}>
+                                    <div className="form-group">
+                                        <label>Nom de la piece</label>
+                                        <input
+                                            type="text"
+                                            value={editingRoomName}
+                                            onChange={(e) => setEditingRoomName(e.target.value)}
+                                            placeholder="Entrez le nouveau nom"
+                                            disabled={savingRoomId === selectedRoomForSettings.id}
+                                            autoFocus
+                                        />
+                                    </div>
+
+                                    <div className="modal-footer" style={{ paddingInline: 0 }}>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => {
+                                                setEditingRoomId(null);
+                                                setEditingRoomName('');
+                                            }}
+                                            disabled={savingRoomId === selectedRoomForSettings.id}
+                                        >
+                                            Annuler
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            className="btn-primary"
+                                            disabled={savingRoomId === selectedRoomForSettings.id}
+                                        >
+                                            {savingRoomId === selectedRoomForSettings.id ? 'Enregistrement...' : 'Enregistrer'}
+                                        </button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <>
+                                    <p>Piece: <strong>{selectedRoomForSettings.name}</strong></p>
+                                    <div className="modal-footer" style={{ paddingInline: 0 }}>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => setShowRoomSettingsModal(false)}
+                                        >
+                                            Fermer
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn-primary"
+                                            onClick={() => {
+                                                setEditingRoomId(selectedRoomForSettings.id);
+                                                setEditingRoomName(selectedRoomForSettings.name);
+                                            }}
+                                            disabled={savingRoomId === selectedRoomForSettings.id}
+                                        >
+                                            Modifier le nom
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn-danger"
+                                            onClick={async () => {
+                                                await handleDeleteRoom(selectedRoomForSettings);
+                                                setShowRoomSettingsModal(false);
+                                                setSelectedRoomForSettings(null);
+                                            }}
+                                            disabled={savingRoomId === selectedRoomForSettings.id}
+                                        >
+                                            {savingRoomId === selectedRoomForSettings.id ? 'Suppression...' : 'Supprimer la zone'}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
                         </div>
                     </div>
                 </div>

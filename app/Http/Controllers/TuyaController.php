@@ -1056,7 +1056,10 @@ class TuyaController extends Controller
         $nonce = bin2hex(random_bytes(8));
         $method = strtoupper($method);
         $jsonBody = $body ? json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
-        $contentHash = hash('sha256', $jsonBody ?: '');
+        
+        // Pour DELETE, le corps doit être vide (pas '{}') pour que la signature soit valide
+        $bodyToSend = ($method === 'DELETE') ? '' : ($jsonBody ?: '{}');
+        $contentHash = hash('sha256', $bodyToSend);
         $stringToSign = "{$method}\n{$contentHash}\n\n{$path}";
         $signPayload = $connection->client_id . $connection->access_token . $timestamp . $nonce . $stringToSign;
         $sign = strtoupper(hash_hmac('sha256', $signPayload, $connection->client_secret));
@@ -1086,7 +1089,7 @@ class TuyaController extends Controller
         }
 
         if ($method === 'DELETE') {
-            return $request->withBody($jsonBody ?: '{}', 'application/json')->delete("{$baseUrl}{$path}");
+            return $request->delete("{$baseUrl}{$path}");
         }
 
         throw new \InvalidArgumentException('Methode HTTP Tuya non supportee: ' . $method);
