@@ -8,7 +8,7 @@ const navItems = [
     { to: '/equipements', label: 'Equipements', icon: '◉' },
     { to: '/sites-zones', label: 'Sites & Pieces', icon: '⌂' },
     { to: '/scenarios', label: 'Scenarios', icon: '≋' },
-    { to: '/automations', label: 'Automations', icon: '⚙' },
+    { to: '/automations', label: 'Automatisations', icon: '⚙' },
     { to: '/alertes', label: 'Alertes', icon: '!' },
     { to: '/rapports', label: 'Rapports', icon: '▤' },
     { to: '/parametres', label: 'Parametres', icon: '⚑' },

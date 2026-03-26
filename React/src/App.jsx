@@ -6,6 +6,7 @@ import AppLayout from './components/layout/AppLayout';
 import DashboardPage from './components/pages/DashboardPage';
 import EquipementsPage from './components/pages/EquipementsPage';
 import ScenariosPage from './components/pages/ScenariosPage';
+import AutomationsPage from './components/pages/AutomationsPage';
 import SectionPage from './components/pages/SectionPage';
 import SettingsPage from './components/pages/SettingsPage';
 import SitesZonesPage from './components/pages/SitesZonesPage';
@@ -39,7 +40,7 @@ function App() {
             />
             <Route
               path="/automations"
-              element={<SectionPage title="Automations" subtitle="Regles automatiques basees sur les seuils capteurs." />}
+              element={<AutomationsPage />}
             />
             <Route
               path="/alertes"

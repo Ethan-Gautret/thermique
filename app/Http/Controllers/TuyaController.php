@@ -618,6 +618,8 @@ class TuyaController extends Controller
                     "/v1.0/iot-03/homes/{$homeId}/linkage-rules",
                     "/v1.0/homes/{$homeId}/linkage-rules?page_no=1&page_size=100",
                     "/v1.0/homes/{$homeId}/linkage-rules",
+                    "/v2.0/cloud/scene/rule?space_id={$homeId}&type=automation&page_no=1&page_size=100",
+                    "/v2.0/cloud/scene/rule?space_id={$homeId}&page_no=1&page_size=100",
                 ];
 
                 foreach ($paths as $path) {
@@ -765,6 +767,21 @@ class TuyaController extends Controller
                 $attempts = [
                     [
                         'method' => 'PUT',
+                        'path' => "/v2.0/cloud/scene/rule/{$scenarioId}",
+                        'body' => ['status' => $targetStatus],
+                    ],
+                    [
+                        'method' => 'POST',
+                        'path' => "/v2.0/cloud/scene/rule/{$scenarioId}/actions/" . $targetStatus,
+                        'body' => null,
+                    ],
+                    [
+                        'method' => 'POST',
+                        'path' => "/v2.0/cloud/scene/rule/{$scenarioId}/actions/" . $targetStatus . "?space_id={$homeId}",
+                        'body' => null,
+                    ],
+                    [
+                        'method' => 'PUT',
                         'path' => "/v1.0/iot-03/automations/{$scenarioId}",
                         'body' => ['status' => $targetStatus],
                     ],
@@ -851,12 +868,12 @@ class TuyaController extends Controller
                         'msg' => $payload['msg'] ?? null,
                     ];
 
-                    if (count($attemptErrors) >= 12) {
+                    if (count($attemptErrors) >= 20) {
                         break;
                     }
                 }
 
-                if (count($attemptErrors) >= 12) {
+                if (count($attemptErrors) >= 20) {
                     break;
                 }
             }
