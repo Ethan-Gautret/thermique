@@ -18,6 +18,18 @@ export const tuyaService = {
   getDevices: () =>
     api.get('/tuya/devices'),
 
+  // Récupérer les scénarios créés dans Tuya
+  getScenarios: () =>
+    api.get('/tuya/scenarios'),
+
+  // Activer ou désactiver un scénario Tuya
+  toggleScenario: (scenarioId, enabled, homeId = null, type = null) =>
+    api.post(`/tuya/scenarios/${scenarioId}/toggle`, {
+      enabled,
+      homeId,
+      type,
+    }),
+
   // Récupérer la série horaire de température de la journée
   getDailyTemperatureSeries: () =>
     api.get('/tuya/temperature/daily-series'),

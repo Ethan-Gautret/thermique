@@ -23,6 +23,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/connection', [TuyaController::class, 'getConnection']);
         Route::post('/connect', [TuyaController::class, 'connect']);
         Route::get('/devices', [TuyaController::class, 'getDevices']);
+        Route::get('/scenarios', [TuyaController::class, 'getScenarios']);
+        Route::post('/scenarios/{scenarioId}/toggle', [TuyaController::class, 'toggleScenario']);
         Route::get('/temperature/daily-series', [TuyaController::class, 'getDailyTemperatureSeries']);
         Route::post('/device/control', [TuyaController::class, 'controlDevice']);
         Route::put('/devices/{deviceId}/category', [TuyaController::class, 'updateDeviceCategory']);

@@ -560,6 +560,361 @@ class TuyaController extends Controller
     }
 
     /**
+     * Obtenir les scénarios créés depuis l'application Tuya.
+     */
+    public function getScenarios(Request $request)
+    {
+        try {
+            $connection = TuyaConnection::where('user_id', Auth::id())->first();
+
+            if (!$connection) {
+                return response()->json(['message' => 'Tuya non connecté'], 401);
+            }
+
+            $configuredHomeId = trim((string) ($connection->home_id ?? ''));
+            $tokenData = $this->getTuyaTokenData(
+                $connection->client_id,
+                $connection->client_secret,
+                $connection->region
+            );
+
+            $connection->update(['access_token' => $tokenData['accessToken']]);
+            $connection->refresh();
+
+            $detectedHomeIds = $this->discoverHomeIds(
+                $connection->client_id,
+                $connection->client_secret,
+                $connection->region,
+                $connection->access_token,
+                $tokenData['uid'] ?? null
+            );
+
+            $candidateHomeIds = collect(array_merge(
+                $configuredHomeId !== '' ? [$configuredHomeId] : [],
+                $detectedHomeIds
+            ))
+                ->filter(fn ($id) => is_scalar($id) && trim((string) $id) !== '')
+                ->map(fn ($id) => trim((string) $id))
+                ->unique()
+                ->values()
+                ->all();
+
+            if (empty($candidateHomeIds)) {
+                return response()->json([
+                    'data' => [],
+                    'message' => 'Aucun Home ID Tuya détecté. Renseignez-le dans les paramètres Tuya pour récupérer les scénarios.',
+                ]);
+            }
+            $endpointErrors = [];
+            $emptySuccesses = [];
+
+            foreach ($candidateHomeIds as $homeId) {
+                $paths = [
+                    "/v1.0/iot-03/homes/{$homeId}/scenes?page_no=1&page_size=100",
+                    "/v1.0/iot-03/homes/{$homeId}/scenes",
+                    "/v1.0/homes/{$homeId}/scenes?page_no=1&page_size=100",
+                    "/v1.0/homes/{$homeId}/scenes",
+                    "/v1.0/iot-03/homes/{$homeId}/linkage-rules?page_no=1&page_size=100",
+                    "/v1.0/iot-03/homes/{$homeId}/linkage-rules",
+                    "/v1.0/homes/{$homeId}/linkage-rules?page_no=1&page_size=100",
+                    "/v1.0/homes/{$homeId}/linkage-rules",
+                ];
+
+                foreach ($paths as $path) {
+                    $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'GET', $path);
+                    $payload = $response->json() ?: [];
+
+                    if (!$response->successful() || (isset($payload['success']) && $payload['success'] === false)) {
+                        $endpointErrors[] = [
+                            'homeId' => $homeId,
+                            'path' => $path,
+                            'status' => $response->status(),
+                            'code' => $payload['code'] ?? null,
+                            'msg' => $payload['msg'] ?? null,
+                        ];
+                        continue;
+                    }
+
+                    $rawScenarios = $this->extractScenarioListFromPayload($payload);
+                    $scenarios = collect($rawScenarios)
+                        ->filter(fn ($item) => is_array($item))
+                        ->map(fn (array $item) => $this->normalizeTuyaScenario($item))
+                        ->filter(fn (array $item) => !empty($item['id']) && !empty($item['name']))
+                        ->values();
+
+                    if ($scenarios->isNotEmpty()) {
+                        if ($configuredHomeId !== $homeId) {
+                            $connection->update(['home_id' => $homeId]);
+                        }
+
+                        return response()->json([
+                            'data' => $scenarios,
+                            'meta' => [
+                                'homeId' => $homeId,
+                                'configuredHomeId' => $configuredHomeId !== '' ? $configuredHomeId : null,
+                                'homeIdsTested' => $candidateHomeIds,
+                                'sourcePath' => $path,
+                            ],
+                            'message' => 'Scénarios Tuya récupérés avec succès',
+                        ]);
+                    }
+
+                    $emptySuccesses[] = [
+                        'homeId' => $homeId,
+                        'path' => $path,
+                        'count' => 0,
+                    ];
+                }
+            }
+
+            Log::warning('Tuya scenarios request failed on all endpoints', [
+                'configured_home_id' => $configuredHomeId,
+                'home_ids_tested' => $candidateHomeIds,
+                'region' => $connection->region,
+                'errors' => $endpointErrors,
+                'empty_successes' => $emptySuccesses,
+            ]);
+
+            $hasAtLeastOneSuccessfulCall = !empty($emptySuccesses);
+            $message = $hasAtLeastOneSuccessfulCall
+                ? 'Aucun scénario trouvé sur les Home IDs testés. Vérifiez dans Tuya Smart que les scénarios sont bien créés dans le même foyer (Home) que vos appareils, puis reconnectez si besoin.'
+                : 'Impossible de récupérer les scénarios Tuya avec les Home IDs disponibles.';
+
+            return response()->json([
+                'data' => [],
+                'message' => $message,
+                'meta' => [
+                    'configuredHomeId' => $configuredHomeId !== '' ? $configuredHomeId : null,
+                    'homeIdsTested' => $candidateHomeIds,
+                    'emptySuccesses' => $emptySuccesses,
+                    'errors' => $endpointErrors,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error while fetching Tuya scenarios', [
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Erreur: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Activer ou desactiver un scenario Tuya.
+     */
+    public function toggleScenario(Request $request, string $scenarioId)
+    {
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+            'homeId' => 'nullable|string|max:120',
+            'type' => 'nullable|string|max:80',
+        ]);
+
+        try {
+            $connection = TuyaConnection::where('user_id', Auth::id())->first();
+
+            if (!$connection) {
+                return response()->json(['message' => 'Tuya non connecté'], 401);
+            }
+
+            $configuredHomeId = trim((string) ($connection->home_id ?? ''));
+            $requestedHomeId = trim((string) ($validated['homeId'] ?? ''));
+            $scenarioType = strtolower(trim((string) ($validated['type'] ?? '')));
+            $targetEnabled = (bool) $validated['enabled'];
+            $targetStatus = $targetEnabled ? 'enable' : 'disable';
+
+            $tokenData = $this->getTuyaTokenData(
+                $connection->client_id,
+                $connection->client_secret,
+                $connection->region
+            );
+
+            $connection->update(['access_token' => $tokenData['accessToken']]);
+            $connection->refresh();
+
+            $detectedHomeIds = $this->discoverHomeIds(
+                $connection->client_id,
+                $connection->client_secret,
+                $connection->region,
+                $connection->access_token,
+                $tokenData['uid'] ?? null
+            );
+
+            $candidateHomeIds = collect(array_merge(
+                $requestedHomeId !== '' ? [$requestedHomeId] : [],
+                $configuredHomeId !== '' ? [$configuredHomeId] : [],
+                $detectedHomeIds
+            ))
+                ->filter(fn ($id) => is_scalar($id) && trim((string) $id) !== '')
+                ->map(fn ($id) => trim((string) $id))
+                ->unique()
+                ->values()
+                ->all();
+
+            if (empty($candidateHomeIds)) {
+                return response()->json([
+                    'message' => 'Aucun Home ID Tuya disponible pour modifier ce scénario.',
+                ], 422);
+            }
+
+            $attemptErrors = [];
+
+            foreach ($candidateHomeIds as $homeId) {
+                $attempts = [
+                    [
+                        'method' => 'PUT',
+                        'path' => "/v1.0/iot-03/automations/{$scenarioId}",
+                        'body' => ['status' => $targetStatus],
+                    ],
+                    [
+                        'method' => 'PUT',
+                        'path' => "/v1.0/iot-03/automations/{$scenarioId}",
+                        'body' => ['enabled' => $targetEnabled],
+                    ],
+                    [
+                        'method' => 'PUT',
+                        'path' => "/v1.0/homes/{$homeId}/scenes/{$scenarioId}",
+                        'body' => ['status' => $targetStatus],
+                    ],
+                    [
+                        'method' => 'POST',
+                        'path' => "/v1.0/homes/{$homeId}/scenes/{$scenarioId}/actions",
+                        'body' => ['action' => $targetStatus],
+                    ],
+                ];
+
+                // Les scènes manuelles ne supportent parfois que l'exécution (trigger) et pas disable.
+                if ($targetEnabled || $scenarioType === 'scene') {
+                    $attempts[] = [
+                        'method' => 'POST',
+                        'path' => "/v1.0/homes/{$homeId}/scenes/{$scenarioId}/trigger",
+                        'body' => null,
+                    ];
+                }
+
+                foreach ($attempts as $attempt) {
+                    $response = $this->tuyaSignedRequestWithAutoRefresh(
+                        $connection,
+                        $attempt['method'],
+                        $attempt['path'],
+                        $attempt['body']
+                    );
+
+                    $payload = $response->json() ?: [];
+                    $isSuccess = $response->successful() && (!isset($payload['success']) || $payload['success'] !== false);
+
+                    if ((string) ($payload['code'] ?? '') === '28841106') {
+                        return response()->json([
+                            'success' => false,
+                            'message' => 'Impossible de modifier ce scénario: l\'API Tuya Automation n\'est pas souscrite pour ce projet cloud.',
+                            'errors' => [[
+                                'homeId' => $homeId,
+                                'method' => $attempt['method'],
+                                'path' => $attempt['path'],
+                                'status' => $response->status(),
+                                'code' => $payload['code'] ?? null,
+                                'msg' => $payload['msg'] ?? null,
+                            ]],
+                            'code' => 'tuya_automation_permission_missing',
+                        ], 200);
+                    }
+
+                    if ($isSuccess) {
+                        if ($configuredHomeId !== $homeId) {
+                            $connection->update(['home_id' => $homeId]);
+                        }
+
+                        return response()->json([
+                            'message' => $targetEnabled
+                                ? 'Scénario activé avec succès'
+                                : 'Scénario désactivé avec succès',
+                            'data' => [
+                                'id' => (string) $scenarioId,
+                                'enabled' => $targetEnabled,
+                                'statusRaw' => $targetStatus,
+                            ],
+                            'meta' => [
+                                'homeId' => $homeId,
+                                'sourcePath' => $attempt['path'],
+                            ],
+                        ]);
+                    }
+
+                    $attemptErrors[] = [
+                        'homeId' => $homeId,
+                        'method' => $attempt['method'],
+                        'path' => $attempt['path'],
+                        'status' => $response->status(),
+                        'code' => $payload['code'] ?? null,
+                        'msg' => $payload['msg'] ?? null,
+                    ];
+
+                    if (count($attemptErrors) >= 12) {
+                        break;
+                    }
+                }
+
+                if (count($attemptErrors) >= 12) {
+                    break;
+                }
+            }
+
+            Log::warning('Unable to toggle Tuya scenario', [
+                'scenario_id' => $scenarioId,
+                'target_enabled' => $targetEnabled,
+                'configured_home_id' => $configuredHomeId,
+                'requested_home_id' => $requestedHomeId,
+                'home_ids_tested' => $candidateHomeIds,
+                'attempt_errors' => $attemptErrors,
+            ]);
+
+            $errorCodes = collect($attemptErrors)
+                ->pluck('code')
+                ->filter(fn ($code) => $code !== null)
+                ->map(fn ($code) => (string) $code)
+                ->values();
+
+            if ($errorCodes->contains('28841106')) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Impossible de modifier ce scénario: l\'API Tuya Automation n\'est pas souscrite pour ce projet cloud.',
+                    'errors' => $attemptErrors,
+                    'code' => 'tuya_automation_permission_missing',
+                ], 200);
+            }
+
+            $onlyUnsupportedOrInvalidPath = $errorCodes->isNotEmpty() && $errorCodes->every(
+                fn ($code) => in_array($code, ['1108', '1100'], true)
+            );
+
+            if ($onlyUnsupportedOrInvalidPath) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Impossible de modifier ce scénario avec les endpoints Tuya disponibles (scénario potentiellement non modifiable via API).',
+                    'errors' => $attemptErrors,
+                    'code' => 'tuya_toggle_not_supported',
+                ], 200);
+            }
+
+            return response()->json([
+                'message' => 'Impossible de modifier l\'état de ce scénario sur Tuya. Vérifiez si ce scénario est de type scène manuelle (déclenchable mais pas désactivable).',
+                'errors' => $attemptErrors,
+            ], 502);
+        } catch (\Exception $e) {
+            Log::error('Error while toggling Tuya scenario', [
+                'scenario_id' => $scenarioId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Erreur: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Contrôler un appareil
      */
     public function controlDevice(Request $request)
@@ -1059,9 +1414,9 @@ class TuyaController extends Controller
         $nonce = bin2hex(random_bytes(8));
         $method = strtoupper($method);
         $jsonBody = $body ? json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : '';
-        
-        // Pour DELETE, le corps doit être vide (pas '{}') pour que la signature soit valide
-        $bodyToSend = ($method === 'DELETE') ? '' : ($jsonBody ?: '{}');
+
+        // Pour GET/DELETE, Tuya attend une signature calculée sur un corps vide.
+        $bodyToSend = in_array($method, ['GET', 'DELETE'], true) ? '' : ($jsonBody ?: '{}');
         $contentHash = hash('sha256', $bodyToSend);
         $stringToSign = "{$method}\n{$contentHash}\n\n{$path}";
         $signPayload = $connection->client_id . $connection->access_token . $timestamp . $nonce . $stringToSign;
@@ -1178,5 +1533,75 @@ class TuyaController extends Controller
         }
 
         return in_array((int) $payload['code'], [1010, 1011], true);
+    }
+
+    private function extractScenarioListFromPayload(array $payload): array
+    {
+        $result = $payload['result'] ?? null;
+
+        if (!is_array($result)) {
+            return [];
+        }
+
+        if (array_is_list($result)) {
+            return $result;
+        }
+
+        foreach (['list', 'scenes', 'rules', 'items', 'data'] as $key) {
+            if (isset($result[$key]) && is_array($result[$key])) {
+                return array_is_list($result[$key]) ? $result[$key] : [];
+            }
+        }
+
+        return [];
+    }
+
+    private function normalizeTuyaScenario(array $scenario): array
+    {
+        $id = $scenario['id']
+            ?? $scenario['scene_id']
+            ?? $scenario['rule_id']
+            ?? $scenario['automation_id']
+            ?? null;
+
+        $name = $scenario['name']
+            ?? $scenario['scene_name']
+            ?? $scenario['rule_name']
+            ?? null;
+
+        $enabledRaw = $scenario['enabled']
+            ?? $scenario['status']
+            ?? $scenario['is_enable']
+            ?? $scenario['status_value']
+            ?? null;
+
+        $enabled = null;
+
+        if (is_bool($enabledRaw)) {
+            $enabled = $enabledRaw;
+        } elseif (is_numeric($enabledRaw)) {
+            $enabled = ((int) $enabledRaw) === 1;
+        } elseif (is_string($enabledRaw)) {
+            $normalized = strtolower(trim($enabledRaw));
+            if (in_array($normalized, ['enable', 'enabled', 'on', 'active', 'true', '1'], true)) {
+                $enabled = true;
+            } elseif (in_array($normalized, ['disable', 'disabled', 'off', 'inactive', 'false', '0'], true)) {
+                $enabled = false;
+            }
+        }
+
+        return [
+            'id' => $id !== null ? (string) $id : null,
+            'name' => $name !== null ? (string) $name : null,
+            'type' => (string) ($scenario['type'] ?? $scenario['rule_type'] ?? 'scenario'),
+            'enabled' => $enabled,
+            'statusRaw' => $enabledRaw,
+            'createdAt' => $this->parseTuyaTimestamp(
+                $scenario['create_time'] ?? $scenario['createTime'] ?? null
+            ),
+            'updatedAt' => $this->parseTuyaTimestamp(
+                $scenario['update_time'] ?? $scenario['updateTime'] ?? $scenario['modify_time'] ?? null
+            ),
+        ];
     }
 }

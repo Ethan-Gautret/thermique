@@ -2072,4 +2072,315 @@ a {
     .equip-filter-bar {
         grid-template-columns: 1fr;
     }
+
+    /* Scenarios page responsive */
+    .scenarios-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Scenarios Styles */
+.scenarios-container {
+    display: grid;
+    gap: 1.2rem;
+}
+
+.scenarios-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.2rem;
+}
+
+.scenario-card {
+    background: linear-gradient(180deg, #fffdf9 0%, #fff7ed 100%);
+    border: 1px solid #fdba74;
+    border-radius: 14px;
+    padding: 1.2rem;
+    display: grid;
+    gap: 1rem;
+    transition: all 0.3s ease;
+    box-shadow: 0 6px 16px rgba(249, 115, 22, 0.12);
+}
+
+.scenario-card:hover {
+    border-color: #f97316;
+    box-shadow: 0 10px 26px rgba(249, 115, 22, 0.22);
+    transform: translateY(-2px);
+}
+
+.scenario-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid #fed7aa;
+}
+
+.scenario-header-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+    width: 100%;
+}
+
+.scenario-icon {
+    font-size: 1.8rem;
+    display: grid;
+    place-content: center;
+    width: 48px;
+    height: 48px;
+    background: linear-gradient(145deg, var(--accent-500), #fb923c);
+    color: #fff;
+    border-radius: 12px;
+    flex-shrink: 0;
+    box-shadow: 0 6px 14px rgba(249, 115, 22, 0.35);
+}
+
+.scenario-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.scenario-description {
+    margin: 0.3rem 0 0;
+    font-size: 0.85rem;
+    color: var(--text-soft);
+}
+
+.scenario-state {
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    white-space: nowrap;
+    border: 1px solid transparent;
+}
+
+.scenario-state.on {
+    background-color: #dcfce7;
+    color: #166534;
+    border-color: #86efac;
+}
+
+.scenario-state.off {
+    background-color: #f3f4f6;
+    color: #374151;
+    border-color: #d1d5db;
+}
+
+.scenario-state.unknown {
+    background-color: #fef08a;
+    color: #854d0e;
+    border-color: #facc15;
+}
+
+.scenario-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.8rem;
+}
+
+.stat-item {
+    background: #fffaf3;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    padding: 0.8rem;
+    text-align: center;
+}
+
+.stat-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-soft);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-item .stat-value {
+    display: block;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--accent-500);
+    margin-top: 0.4rem;
+}
+
+.scenario-stat-text {
+    font-size: 0.9rem !important;
+    text-transform: capitalize;
+    color: var(--text-main) !important;
+}
+
+.scenario-stat-id {
+    font-size: 0.75rem !important;
+    line-height: 1.3;
+    color: var(--text-soft) !important;
+    overflow-wrap: anywhere;
+}
+
+.scenario-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+}
+
+.scenario-meta-item {
+    background: #fffaf3;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    padding: 0.7rem;
+    display: grid;
+    gap: 0.25rem;
+}
+
+.scenario-meta-item-wide {
+    grid-column: 1 / -1;
+}
+
+.scenario-meta-label {
+    font-size: 0.72rem;
+    color: var(--text-soft);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.35px;
+}
+
+.scenario-meta-value {
+    font-size: 0.86rem;
+    color: var(--text-main);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.scenario-planning {
+    display: grid;
+    gap: 0.6rem;
+}
+
+.scenario-planning h4 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.planning-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 0.6rem;
+}
+
+.planning-day {
+    background: linear-gradient(135deg, var(--accent-100), #fff3e8);
+    border: 1px solid var(--accent-500);
+    border-radius: 8px;
+    padding: 0.6rem;
+    text-align: center;
+}
+
+.day-label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #9a3412;
+}
+
+.time-slot {
+    display: block;
+    font-size: 0.7rem;
+    color: #7c2d12;
+    margin-top: 0.2rem;
+}
+
+.scenario-sites {
+    display: grid;
+    gap: 0.6rem;
+}
+
+.scenario-sites h4 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.sites-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.site-badge {
+    display: inline-block;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-soft);
+    color: var(--text-main);
+    border-radius: 100px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.site-badge:hover {
+    background: var(--accent-100);
+    border-color: var(--accent-500);
+    color: #7c2d12;
+}
+
+.scenario-apply-btn {
+    background: linear-gradient(145deg, var(--accent-500), #fb923c);
+    color: #fff;
+    border: 0;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    margin-top: 0.4rem;
+}
+
+.scenario-apply-btn:hover {
+    background: linear-gradient(145deg, var(--accent-600), var(--accent-500));
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px rgba(249, 115, 22, 0.3);
+}
+
+.scenario-apply-btn:active {
+    transform: scale(0.98);
+}
+
+.no-data {
+    margin: 0;
+    color: var(--text-soft);
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.loading-container {
+    display: grid;
+    place-items: center;
+    gap: 1rem;
+    padding: 2rem;
+    min-height: 300px;
+    color: var(--text-soft);
+}
+
+.loading-container p {
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+/* Responsive Scenarios */
+@media (max-width: 920px) {
+    .scenarios-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .scenario-meta-grid {
+        grid-template-columns: 1fr;
+    }
 }
