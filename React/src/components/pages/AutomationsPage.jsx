@@ -27,6 +27,47 @@ function isAutomationType(type) {
         || normalized.includes('rule');
 }
 
+function normalizeWeekDays(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return Array.from(new Set(
+        value
+            .map((entry) => Number(entry))
+            .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    ));
+}
+
+function formatWeekDaysLabel(days) {
+    const normalized = normalizeWeekDays(days);
+    if (normalized.length === 0 || normalized.length === 7) {
+        return 'Tous les jours';
+    }
+
+    const names = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+    return normalized
+        .sort((a, b) => a - b)
+        .map((day) => names[day])
+        .join(', ');
+}
+
+function formatAutomationSchedule(triggerTime, weekDays, isAutomation) {
+    const cleanTime = typeof triggerTime === 'string' && /^([01]?\d|2[0-3]):([0-5]\d)$/.test(triggerTime)
+        ? triggerTime
+        : null;
+
+    if (!cleanTime) {
+        if (!isAutomation) {
+            return 'Declenchement manuel (pas d\'horaire planifie)';
+        }
+
+        return 'Horaire non remonte par Tuya';
+    }
+
+    return `${cleanTime} (${formatWeekDaysLabel(weekDays)})`;
+}
+
 function toAutomationCard(item) {
     const type = (item.type || 'automation').toString();
     const enabled = item.enabled;
@@ -40,8 +81,12 @@ function toAutomationCard(item) {
         active: enabled === true,
         stateLabel: enabled === true ? 'Actif' : (enabled === false ? 'Inactif' : 'Inconnu'),
         statusRaw: item.statusRaw,
+        triggerTime: item.triggerTime || null,
+        weekDays: Array.isArray(item.weekDays) ? item.weekDays : [],
+        scheduleLabel: formatAutomationSchedule(item.triggerTime, item.weekDays, isAutomationType(type)),
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
+        _raw: item, // Pour debug
     };
 }
 
@@ -270,6 +315,7 @@ export default function AutomationsPage() {
                                             )}
                                         </h3>
                                         <p>Type Tuya: {automation.type}</p>
+                                        <p>Horaire: {automation.scheduleLabel}</p>
                                     </div>
                                 </div>
 
@@ -290,6 +336,13 @@ export default function AutomationsPage() {
                                 <span>ID: {automation.id || 'N/A'}</span>
                                 <span>Cree le: {formatDate(automation.createdAt)}</span>
                             </div>
+
+                            <details style={{ marginTop: '0.5rem', fontSize: '0.8em', color: '#64748b' }}>
+                                <summary>Debug: Données brutes</summary>
+                                <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f8fafc', borderRadius: 8, padding: 8, marginTop: 4 }}>
+                                    {JSON.stringify(automation._raw, null, 2)}
+                                </pre>
+                            </details>
 
                             <div className="automation-item-actions">
                                 <p>Etat Tuya:</p>

@@ -640,7 +640,23 @@ class TuyaController extends Controller
                     $rawScenarios = $this->extractScenarioListFromPayload($payload);
                     $scenarios = collect($rawScenarios)
                         ->filter(fn ($item) => is_array($item))
-                        ->map(fn (array $item) => $this->normalizeTuyaScenario($item))
+                        ->map(function (array $item) use ($connection, $homeId) {
+                            $normalized = $this->normalizeTuyaScenario($item);
+
+                            if (!empty($normalized['id']) && empty($normalized['triggerTime'])) {
+                                $resolvedTriggerTime = $this->resolveScenarioTriggerTime(
+                                    $connection,
+                                    (string) $homeId,
+                                    (string) $normalized['id']
+                                );
+
+                                if ($resolvedTriggerTime !== null) {
+                                    $normalized['triggerTime'] = $resolvedTriggerTime;
+                                }
+                            }
+
+                            return $normalized;
+                        })
                         ->filter(fn (array $item) => !empty($item['id']) && !empty($item['name']))
                         ->values();
 
@@ -1573,6 +1589,307 @@ class TuyaController extends Controller
         return [];
     }
 
+    private function extractScenarioTriggerTime(array $scenario): ?string
+    {
+        $candidates = [
+            $scenario['trigger_time'] ?? null,
+            $scenario['time'] ?? null,
+            $scenario['timer'] ?? null,
+            $scenario['timers'] ?? null,
+            $scenario['schedule'] ?? null,
+            $scenario['schedules'] ?? null,
+            $scenario['cron'] ?? null,
+            $scenario['crontab'] ?? null,
+            $scenario['expression'] ?? null,
+            $scenario['timer_rule'] ?? null,
+            $scenario['effective_time'] ?? null,
+            $scenario['preconditions'] ?? null,
+            $scenario['precondition_list'] ?? null,
+            $scenario['condition'] ?? null,
+            $scenario['conditions'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate === null) {
+                continue;
+            }
+
+            if (is_numeric($candidate)) {
+                $numeric = (int) $candidate;
+
+                // Tuya fields can store HHMM (e.g. 1000) or seconds in day.
+                if ($numeric >= 0 && $numeric <= 2359) {
+                    $hours = intdiv($numeric, 100);
+                    $minutes = $numeric % 100;
+                    if ($hours <= 23 && $minutes <= 59) {
+                        return sprintf('%02d:%02d', $hours, $minutes);
+                    }
+                }
+
+                if ($numeric >= 0 && $numeric <= 1439) {
+                    $hours = intdiv($numeric, 60);
+                    $minutes = $numeric % 60;
+                    return sprintf('%02d:%02d', $hours, $minutes);
+                }
+
+                if ($numeric >= 0 && $numeric <= 86399) {
+                    $hours = intdiv($numeric, 3600);
+                    $minutes = intdiv($numeric % 3600, 60);
+                    return sprintf('%02d:%02d', $hours, $minutes);
+                }
+            }
+
+            $text = is_string($candidate)
+                ? $candidate
+                : json_encode($candidate, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            if (!is_string($text) || $text === '') {
+                continue;
+            }
+
+            if (preg_match('/(?:^|[^0-9])([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:[^0-9]|$)/', $text, $matches)) {
+                return sprintf('%02d:%02d', (int) $matches[1], (int) $matches[2]);
+            }
+
+            if (preg_match('/(?:^|[^0-9])([01]?\d|2[0-3])([0-5]\d)(?:[^0-9]|$)/', $text, $matches)) {
+                return sprintf('%02d:%02d', (int) $matches[1], (int) $matches[2]);
+            }
+
+            $cronTime = $this->extractClockTimeFromCronText($text);
+            if ($cronTime !== null) {
+                return $cronTime;
+            }
+        }
+
+        // Last chance: scan complete payload string for embedded schedule times.
+        $rawScenario = json_encode($scenario, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if (is_string($rawScenario) && $rawScenario !== '') {
+            if (preg_match('/(?:^|[^0-9])([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?:[^0-9]|$)/', $rawScenario, $matches)) {
+                return sprintf('%02d:%02d', (int) $matches[1], (int) $matches[2]);
+            }
+
+            if (preg_match('/"(?:time|timer|trigger_time)"\s*:\s*"?([01]?\d|2[0-3])([0-5]\d)"?/i', $rawScenario, $matches)) {
+                return sprintf('%02d:%02d', (int) $matches[1], (int) $matches[2]);
+            }
+
+            $cronTime = $this->extractClockTimeFromCronText($rawScenario);
+            if ($cronTime !== null) {
+                return $cronTime;
+            }
+        }
+
+        return null;
+    }
+
+    private function extractClockTimeFromCronText(string $text): ?string
+    {
+        if (trim($text) === '') {
+            return null;
+        }
+
+        $pattern = '/([\*\d\/,\-\?]+(?:\s+[\*\d\/,\-\?]+){4,6})/';
+        if (!preg_match_all($pattern, $text, $matches) || empty($matches[1])) {
+            return null;
+        }
+
+        foreach ($matches[1] as $expression) {
+            $parsed = $this->parseCronExpressionToClock((string) $expression);
+            if ($parsed !== null) {
+                return $parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private function parseCronExpressionToClock(string $expression): ?string
+    {
+        $tokens = preg_split('/\s+/', trim($expression));
+        if (!is_array($tokens)) {
+            return null;
+        }
+
+        $tokens = array_values(array_filter($tokens, fn ($token) => $token !== ''));
+        $count = count($tokens);
+
+        // Unix cron: m h dom mon dow (5 tokens)
+        // Quartz cron: s m h dom mon dow [y] (6 or 7 tokens)
+        if ($count === 5) {
+            $minute = $this->extractCronFieldNumber($tokens[0], 59);
+            $hour = $this->extractCronFieldNumber($tokens[1], 23);
+
+            if ($hour !== null && $minute !== null) {
+                return sprintf('%02d:%02d', $hour, $minute);
+            }
+
+            return null;
+        }
+
+        if ($count >= 6 && $count <= 7) {
+            $minute = $this->extractCronFieldNumber($tokens[1], 59);
+            $hour = $this->extractCronFieldNumber($tokens[2], 23);
+
+            if ($hour !== null && $minute !== null) {
+                return sprintf('%02d:%02d', $hour, $minute);
+            }
+        }
+
+        return null;
+    }
+
+    private function extractCronFieldNumber(string $field, int $max): ?int
+    {
+        if ($field === '' || $field === '*' || $field === '?') {
+            return null;
+        }
+
+        if (preg_match('/(\d{1,2})/', $field, $matches)) {
+            $value = (int) $matches[1];
+            if ($value >= 0 && $value <= $max) {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function extractScenarioWeekDays(array $scenario): ?array
+    {
+        $candidates = [
+            $scenario['loops'] ?? null,
+            $scenario['loop'] ?? null,
+            $scenario['days'] ?? null,
+            $scenario['week_days'] ?? null,
+            $scenario['weekDays'] ?? null,
+            $scenario['repeat'] ?? null,
+            $scenario['effective_time'] ?? null,
+            $scenario['timer'] ?? null,
+            $scenario['timers'] ?? null,
+            $scenario['schedule'] ?? null,
+            $scenario['schedules'] ?? null,
+            $scenario['preconditions'] ?? null,
+            $scenario['precondition_list'] ?? null,
+            $scenario['condition'] ?? null,
+            $scenario['conditions'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate === null) {
+                continue;
+            }
+
+            $text = is_string($candidate)
+                ? strtolower($candidate)
+                : json_encode($candidate, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+            if (!is_string($text) || trim($text) === '') {
+                continue;
+            }
+
+            // Tuya common loop masks: 7 bits (Mon->Sun) or (Sun->Sat)
+            if (preg_match('/\b([01]{7})\b/', $text, $matches)) {
+                $mask = $matches[1];
+                $days = [];
+
+                // Assume Monday-first mask: index 0 -> Monday (1), ... index 6 -> Sunday (0)
+                for ($index = 0; $index < 7; $index++) {
+                    if ($mask[$index] === '1') {
+                        $days[] = $index === 6 ? 0 : $index + 1;
+                    }
+                }
+
+                $days = array_values(array_unique($days));
+                if (!empty($days)) {
+                    sort($days);
+                    return $days;
+                }
+            }
+
+            $map = [
+                'sun' => 0,
+                'sunday' => 0,
+                'dim' => 0,
+                'dimanche' => 0,
+                'mon' => 1,
+                'monday' => 1,
+                'lun' => 1,
+                'lundi' => 1,
+                'tue' => 2,
+                'tues' => 2,
+                'tuesday' => 2,
+                'mar' => 2,
+                'mardi' => 2,
+                'wed' => 3,
+                'wednesday' => 3,
+                'mer' => 3,
+                'mercredi' => 3,
+                'thu' => 4,
+                'thursday' => 4,
+                'jeu' => 4,
+                'jeudi' => 4,
+                'fri' => 5,
+                'friday' => 5,
+                'ven' => 5,
+                'vendredi' => 5,
+                'sat' => 6,
+                'saturday' => 6,
+                'sam' => 6,
+                'samedi' => 6,
+            ];
+
+            $detected = [];
+            foreach ($map as $token => $dayNumber) {
+                if (preg_match('/\b' . preg_quote($token, '/') . '\b/u', $text)) {
+                    $detected[] = $dayNumber;
+                }
+            }
+
+            if (!empty($detected)) {
+                $detected = array_values(array_unique($detected));
+                sort($detected);
+                return $detected;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveScenarioTriggerTime(TuyaConnection $connection, string $homeId, string $scenarioId): ?string
+    {
+        $paths = [
+            "/v2.0/cloud/scene/rule/{$scenarioId}",
+            "/v2.0/cloud/scene/rule/{$scenarioId}?space_id={$homeId}",
+            "/v1.0/homes/{$homeId}/scenes/{$scenarioId}",
+            "/v1.0/iot-03/homes/{$homeId}/scenes/{$scenarioId}",
+            "/v1.0/homes/{$homeId}/linkage-rules/{$scenarioId}",
+            "/v1.0/iot-03/homes/{$homeId}/linkage-rules/{$scenarioId}",
+        ];
+
+        foreach ($paths as $path) {
+            $response = $this->tuyaSignedRequestWithAutoRefresh($connection, 'GET', $path);
+            $payload = $response->json() ?: [];
+
+            if (!$response->successful() || (isset($payload['success']) && $payload['success'] === false)) {
+                continue;
+            }
+
+            $result = $payload['result'] ?? null;
+            if (is_array($result)) {
+                $triggerTime = $this->extractScenarioTriggerTime($result);
+                if ($triggerTime !== null) {
+                    return $triggerTime;
+                }
+            }
+
+            $triggerTimeFromPayload = $this->extractScenarioTriggerTime($payload);
+            if ($triggerTimeFromPayload !== null) {
+                return $triggerTimeFromPayload;
+            }
+        }
+
+        return null;
+    }
+
     private function normalizeTuyaScenario(array $scenario): array
     {
         $id = $scenario['id']
@@ -1607,12 +1924,16 @@ class TuyaController extends Controller
             }
         }
 
+        $resolvedType = $this->inferScenarioType($scenario);
+
         return [
             'id' => $id !== null ? (string) $id : null,
             'name' => $name !== null ? (string) $name : null,
-            'type' => (string) ($scenario['type'] ?? $scenario['rule_type'] ?? 'scenario'),
+            'type' => $resolvedType,
             'enabled' => $enabled,
             'statusRaw' => $enabledRaw,
+            'triggerTime' => $this->extractScenarioTriggerTime($scenario),
+            'weekDays' => $this->extractScenarioWeekDays($scenario),
             'createdAt' => $this->parseTuyaTimestamp(
                 $scenario['create_time'] ?? $scenario['createTime'] ?? null
             ),
@@ -1620,5 +1941,43 @@ class TuyaController extends Controller
                 $scenario['update_time'] ?? $scenario['updateTime'] ?? $scenario['modify_time'] ?? null
             ),
         ];
+    }
+
+    private function inferScenarioType(array $scenario): string
+    {
+        $rawType = strtolower(trim((string) ($scenario['type'] ?? $scenario['rule_type'] ?? '')));
+        if ($rawType !== '') {
+            return $rawType;
+        }
+
+        $automationMarkers = [
+            'trigger_time',
+            'time',
+            'timer',
+            'timers',
+            'schedule',
+            'schedules',
+            'cron',
+            'crontab',
+            'expression',
+            'preconditions',
+            'precondition_list',
+            'condition',
+            'conditions',
+            'effective_time',
+            'loops',
+            'loop',
+            'week_days',
+            'weekDays',
+            'repeat',
+        ];
+
+        foreach ($automationMarkers as $key) {
+            if (array_key_exists($key, $scenario) && $scenario[$key] !== null && $scenario[$key] !== '') {
+                return 'automation';
+            }
+        }
+
+        return 'scenario';
     }
 }

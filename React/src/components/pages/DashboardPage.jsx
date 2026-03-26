@@ -136,7 +136,6 @@ function buildTemperatureScale(points) {
             if (rawValue === null || rawValue === undefined || rawValue === '') {
                 return null;
             }
-
             const numericValue = Number(rawValue);
             return Number.isFinite(numericValue) ? numericValue : null;
         })
@@ -155,19 +154,22 @@ function buildTemperatureScale(points) {
 
     const sourceMin = Math.min(...values);
     const sourceMax = Math.max(...values);
-    let min = Math.floor(sourceMin);
-    let max = Math.ceil(sourceMax);
 
+    // Ajoute une marge visuelle de 0.5°C autour de la courbe
+    let min = Math.floor(sourceMin * 2) / 2 - 0.5;
+    let max = Math.ceil(sourceMax * 2) / 2 + 0.5;
+
+    // Si toutes les valeurs sont identiques, force une petite plage
     if (max === min) {
         min -= 1;
         max += 1;
     }
 
-    // Keep a readable temperature ladder when values are very close (e.g. one recorded hour).
-    if ((max - min) < 4) {
-        const center = Math.round((sourceMin + sourceMax) / 2);
-        min = center - 2;
-        max = center + 2;
+    // Si la plage est très faible (<2°C), élargit légèrement pour la lisibilité
+    if ((max - min) < 2) {
+        const center = (sourceMin + sourceMax) / 2;
+        min = Math.floor(center - 1);
+        max = Math.ceil(center + 1);
     }
 
     const range = Math.max(max - min, 1);
@@ -203,26 +205,175 @@ function temperatureToChartY(value, min, max) {
     return height - normalized * height;
 }
 
-const upcomingActions = [
-    {
-        title: 'Chauffage bureaux - Matin',
-        detail: 'Mise en confort bureaux 06:00',
-        meta: 'jeu. 12 mars, 08:14',
-        eta: '21h',
-    },
-    {
-        title: 'Chauffage bureaux - Soir',
-        detail: 'Passage en eco bureaux 18:00',
-        meta: 'jeu. 12 mars, 09:14',
-        eta: '22h',
-    },
-    {
-        title: 'Reactivation atelier lundi',
-        detail: 'Remise en chauffe atelier lundi matin',
-        meta: 'dim. 15 mars, 10:14',
-        eta: '95h',
-    },
-];
+function parseTriggerTimeToMinutes(triggerTime) {
+    if (triggerTime === null || triggerTime === undefined) {
+        return null;
+    }
+
+    const text = String(triggerTime).trim();
+    if (text === '') {
+        return null;
+    }
+
+    const hhmmMatch = text.match(/^(\d{1,2}):(\d{2})$/);
+    if (hhmmMatch) {
+        const hours = Number(hhmmMatch[1]);
+        const minutes = Number(hhmmMatch[2]);
+        if (Number.isInteger(hours) && Number.isInteger(minutes) && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+            return (hours * 60) + minutes;
+        }
+    }
+
+    if (/^\d+$/.test(text)) {
+        const numeric = Number(text);
+
+        if (numeric >= 0 && numeric <= 2359) {
+            const hours = Math.floor(numeric / 100);
+            const minutes = numeric % 100;
+            if (hours <= 23 && minutes <= 59) {
+                return (hours * 60) + minutes;
+            }
+        }
+
+        if (numeric >= 0 && numeric <= 1439) {
+            return numeric;
+        }
+
+        if (numeric >= 0 && numeric <= 86399) {
+            return Math.floor(numeric / 60);
+        }
+    }
+
+    return null;
+}
+
+function formatEta(targetDate) {
+    const diffMs = Math.max(targetDate.getTime() - Date.now(), 0);
+    const diffMinutes = Math.ceil(diffMs / 60000);
+    const days = Math.floor(diffMinutes / 1440);
+    const remainingMinutes = diffMinutes % 1440;
+    const hours = Math.floor(remainingMinutes / 60);
+    const minutes = remainingMinutes % 60;
+
+    if (days > 0 && hours > 0) {
+        return `${days}j ${hours}h`;
+    }
+
+    if (days > 0) {
+        return `${days}j`;
+    }
+
+    if (hours > 0 && minutes > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+
+    if (hours > 0) {
+        return `${hours}h`;
+    }
+
+    return `${Math.max(minutes, 1)}m`;
+}
+
+function isAutomationType(type) {
+    const normalized = String(type || '').toLowerCase();
+    return normalized.includes('automation') || normalized.includes('linkage') || normalized.includes('rule');
+}
+
+function normalizeWeekDays(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return Array.from(new Set(
+        value
+            .map((entry) => Number(entry))
+            .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    ));
+}
+
+function formatWeekDaysLabel(days) {
+    const normalized = normalizeWeekDays(days);
+    if (normalized.length === 0 || normalized.length === 7) {
+        return 'Tous les jours';
+    }
+
+    const names = ['dim', 'lun', 'mar', 'mer', 'jeu', 'ven', 'sam'];
+    return normalized
+        .sort((a, b) => a - b)
+        .map((day) => names[day])
+        .join(', ');
+}
+
+function computeNextExecutionDate(triggerMinutes, weekDays) {
+    if (!Number.isFinite(triggerMinutes)) {
+        return null;
+    }
+
+    const now = new Date();
+    const allowedDays = normalizeWeekDays(weekDays);
+
+    for (let offset = 0; offset <= 14; offset += 1) {
+        const candidate = new Date(now);
+        candidate.setSeconds(0, 0);
+        candidate.setDate(now.getDate() + offset);
+        candidate.setHours(Math.floor(triggerMinutes / 60), triggerMinutes % 60, 0, 0);
+
+        const dayOfWeek = candidate.getDay();
+        const isAllowedDay = allowedDays.length === 0 || allowedDays.includes(dayOfWeek);
+
+        if (!isAllowedDay) {
+            continue;
+        }
+
+        if (candidate.getTime() > now.getTime()) {
+            return candidate;
+        }
+    }
+
+    return null;
+}
+
+function buildUpcomingAutomationActions(rawScenarios, limit = 3) {
+    const computed = (Array.isArray(rawScenarios) ? rawScenarios : [])
+        .filter((item) => item && item.enabled !== false)
+        // On ne garde que les vraies automatisations planifiées (horaire détecté)
+        .filter((item) => {
+            const triggerTime = item.triggerTime || null;
+            const triggerMinutes = parseTriggerTimeToMinutes(triggerTime);
+            return triggerMinutes !== null;
+        })
+        .map((item) => {
+            const triggerTime = item.triggerTime || null;
+            const triggerMinutes = parseTriggerTimeToMinutes(triggerTime);
+            const nextAt = computeNextExecutionDate(triggerMinutes, item.weekDays);
+            if (!nextAt) {
+                return null;
+            }
+            return {
+                id: item.id || `${item.name || 'automation'}-${triggerTime}`,
+                title: item.name || 'Automatisation sans nom',
+                detail: `Declenchement programme a ${triggerTime} (${formatWeekDaysLabel(item.weekDays)})`,
+                meta: nextAt.toLocaleString('fr-FR', {
+                    day: '2-digit',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                }),
+                eta: formatEta(nextAt),
+                nextAt,
+                hasSchedule: true,
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => {
+            if (!a.nextAt || !b.nextAt) {
+                return 0;
+            }
+            return a.nextAt.getTime() - b.nextAt.getTime();
+        });
+
+    return computed.slice(0, limit);
+}
 
 export default function DashboardPage() {
     const [deviceStats, setDeviceStats] = useState({
@@ -238,6 +389,7 @@ export default function DashboardPage() {
         loading: true,
         items: [],
     });
+    const [upcomingAutomationActions, setUpcomingAutomationActions] = useState([]);
 
     useEffect(() => {
         const loadDeviceStats = async () => {
@@ -318,6 +470,14 @@ export default function DashboardPage() {
                     loading: false,
                     items,
                 });
+
+                try {
+                    const scenariosResponse = await tuyaService.getScenarios();
+                    const rawScenarios = scenariosResponse.data?.data || [];
+                    setUpcomingAutomationActions(buildUpcomingAutomationActions(rawScenarios, 8));
+                } catch {
+                    setUpcomingAutomationActions([]);
+                }
             } catch {
                 setDeviceStats({
                     loading: false,
@@ -332,6 +492,7 @@ export default function DashboardPage() {
                     loading: false,
                     items: [],
                 });
+                setUpcomingAutomationActions([]);
             }
         };
 
@@ -510,8 +671,19 @@ export default function DashboardPage() {
                     </div>
 
                     <ul className="actions-list">
-                        {upcomingActions.map((action) => (
-                            <li key={action.title}>
+                        {upcomingAutomationActions.length === 0 && (
+                            <li>
+                                <div>
+                                    <p className="action-title">Aucune automatisation planifiee</p>
+                                    <p className="action-detail">Ajoute une heure de declenchement dans Tuya pour voir les prochaines actions ici.</p>
+                                    <p className="action-meta">Source: automatisations Tuya actives</p>
+                                </div>
+                                <span>--</span>
+                            </li>
+                        )}
+
+                        {upcomingAutomationActions.map((action) => (
+                            <li key={action.id}>
                                 <div>
                                     <p className="action-title">{action.title}</p>
                                     <p className="action-detail">{action.detail}</p>
