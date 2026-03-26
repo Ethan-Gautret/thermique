@@ -77,8 +77,43 @@ export default function EquipementsPage() {
         }
     };
 
-    const sendPowerCommand = async (deviceId, nextPowerOn) => {
-        const commandCandidates = ['switch_led', 'switch_1', 'switch'];
+    const getPowerCommandCandidates = (device) => {
+        const knownPowerCommand = String(device?.powerCommand || '').trim();
+        if (knownPowerCommand !== '') {
+            return [knownPowerCommand];
+        }
+
+        const properties = Array.isArray(device?.properties) ? device.properties : [];
+        const propertyCodes = properties
+            .map((property) => String(property?.code || '').toLowerCase())
+            .filter(Boolean);
+
+        const detected = [];
+
+        if (propertyCodes.includes('switch_1')) {
+            detected.push('switch_1');
+        }
+
+        if (propertyCodes.includes('switch')) {
+            detected.push('switch');
+        }
+
+        if (propertyCodes.includes('switch_led')) {
+            detected.push('switch_led');
+        }
+
+        const fallback = ['switch_1', 'switch', 'switch_led'];
+        return [...new Set([...detected, ...fallback])];
+    };
+
+    const sendPowerCommand = async (device, nextPowerOn) => {
+        const deviceId = device?.id;
+
+        if (!deviceId) {
+            throw new Error('Identifiant appareil manquant.');
+        }
+
+        const commandCandidates = getPowerCommandCandidates(device);
         let lastError = null;
 
         for (const command of commandCandidates) {
@@ -93,6 +128,11 @@ export default function EquipementsPage() {
                 return true;
             } catch (err) {
                 lastError = err;
+
+                // If the backend explicitly rejects the command, don't spam other attempts.
+                if (err?.response?.status === 422) {
+                    break;
+                }
             }
         }
 
@@ -115,7 +155,7 @@ export default function EquipementsPage() {
         setError('');
 
         try {
-            await sendPowerCommand(device.id, nextPowerOn);
+            await sendPowerCommand(device, nextPowerOn);
             await loadDevices();
         } catch (err) {
             const message = err.response?.data?.message || 'Impossible de changer l\'etat de cet equipement.';
@@ -267,7 +307,8 @@ export default function EquipementsPage() {
 
     const renderDeviceCard = (device) => {
         const isControlling = controllingDeviceId === device.id;
-        const canControl = device.online && !isControlling;
+        const hasPowerControl = device.powerOn !== null;
+        const canControl = device.online && hasPowerControl && !isControlling;
         const primaryMetrics = getPrimaryMetrics(device);
         const rawProperties = Array.isArray(device.properties) ? device.properties : [];
         const categoryName = device.category_id && categoriesById[device.category_id]
@@ -276,7 +317,7 @@ export default function EquipementsPage() {
         const modeProperty = rawProperties.find((property) => String(property?.code || '').toLowerCase().includes('mode'));
         const modeValue = modeProperty?.value ? String(modeProperty.value) : '-';
         const accentMetric = primaryMetrics.find((metric) => metric.key === 'temperature') || primaryMetrics[0];
-        const powerLabel = device.powerOn ? 'ON' : 'OFF';
+        const powerLabel = device.powerOn === null ? 'N/A' : (device.powerOn ? 'ON' : 'OFF');
 
         return (
             <article key={device.id} className="equip-card-modern">
@@ -319,7 +360,11 @@ export default function EquipementsPage() {
                         className={`equip-power-btn ${device.powerOn ? 'on' : 'off'}`}
                         onClick={() => handleTogglePower(device)}
                         disabled={!canControl}
-                        title={device.online ? 'Controler la mise sous tension' : 'Appareil hors ligne'}
+                        title={
+                            !device.online
+                                ? 'Appareil hors ligne'
+                                : (!hasPowerControl ? 'Equipement non pilotable (pas de commande power detectee)' : 'Controler la mise sous tension')
+                        }
                     >
                         {isControlling ? 'Envoi...' : `⏻ ${powerLabel}`}
                     </button>
@@ -428,9 +473,11 @@ export default function EquipementsPage() {
                 {error && (
                     <div className="tuya-feedback error">
                         <p>{error}</p>
-                        <p>
-                            Verifiez la connexion dans <Link to="/parametres">Parametres</Link>.
-                        </p>
+                        {String(error).toLowerCase().includes('connexion') && (
+                            <p>
+                                Verifiez la connexion dans <Link to="/parametres">Parametres</Link>.
+                            </p>
+                        )}
                     </div>
                 )}
 

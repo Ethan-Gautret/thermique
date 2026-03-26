@@ -454,6 +454,7 @@ class TuyaController extends Controller
 
             $devices = collect($rawDevices)->map(function ($device) use ($connection, $persistedCategoryById) {
                 $powerState = null;
+                $powerCommand = null;
                 $normalizedProperties = [];
                 
                 // Récupérer l'état on/off de l'appareil
@@ -502,6 +503,7 @@ class TuyaController extends Controller
                                     $code = strtolower($property['code']);
                                     if (strpos($code, 'switch') !== false || strpos($code, 'power') !== false) {
                                         $powerState = (bool) $property['value'];
+                                        $powerCommand = (string) $property['code'];
                                         Log::debug('Found power property', [
                                             'device_id' => $device['id'] ?? null,
                                             'code' => $property['code'],
@@ -511,13 +513,9 @@ class TuyaController extends Controller
                                     }
                                 }
                             }
-                            // Si pas trouvée, prendre la première propriété
-                            if ($powerState === null && isset($properties[0]['value'])) {
-                                $powerState = (bool) $properties[0]['value'];
-                                Log::debug('Using first property as power state', [
+                            if ($powerState === null) {
+                                Log::debug('No power property found for device', [
                                     'device_id' => $device['id'] ?? null,
-                                    'first_property' => $properties[0],
-                                    'value' => $powerState,
                                 ]);
                             }
                         }
@@ -536,6 +534,7 @@ class TuyaController extends Controller
                     'category_id' => isset($device['id']) ? ($persistedCategoryById[(string) $device['id']] ?? null) : null,
                     'online' => (bool) ($device['isOnline'] ?? $device['online'] ?? false),
                     'powerOn' => $powerState,
+                    'powerCommand' => $powerCommand,
                     'model' => $device['model'] ?? null,
                     'productName' => $device['productName'] ?? null,
                     'ip' => $device['ip'] ?? null,
@@ -613,7 +612,10 @@ class TuyaController extends Controller
             }
 
             if (!$commandSent) {
-                throw new \Exception('Commande refusee par Tuya. ' . implode(' | ', $errors));
+                return response()->json([
+                    'message' => 'Commande refusee par Tuya.',
+                    'details' => $errors,
+                ], 422);
             }
 
             $expectedValue = (bool) $validated['value'];
@@ -626,7 +628,8 @@ class TuyaController extends Controller
                     'command' => $validated['command'],
                     'expectedPowerOn' => $expectedValue,
                     'currentPowerOn' => $currentPowerOn,
-                    'applied' => $currentPowerOn === $expectedValue,
+                    'applied' => $currentPowerOn === null ? null : ($currentPowerOn === $expectedValue),
+                    'stateVerified' => $currentPowerOn !== null,
                 ],
             ]);
         } catch (\Exception $e) {
